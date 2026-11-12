@@ -1,13 +1,21 @@
-import React, { useState } from 'react';
-import { Lock, Download, LogOut, Cloud, BookOpen, Bell, BellOff, RotateCcw } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Lock, Download, LogOut, Cloud, BookOpen, Bell, BellOff, RotateCcw, Tags, Wand2 } from 'lucide-react';
 import { fetchApi } from '../api';
-import { User, Transaction, Account, Category } from '../types';
+import { User, Transaction, Account, Category, AutoRule } from '../types';
 import { GuideSectionId } from '../data/userGuide';
+import { ShortcutTokensCard } from '../components/ShortcutTokensCard';
+import { CategoryManageModal } from '../components/CategoryManageModal';
+import { RuleManageModal } from '../components/RuleManageModal';
+import { DynamicIcon } from '../components/DynamicIcon';
 
 interface Props {
   user: User;
+  accounts: Account[];
+  categories: Category[];
+  onCategoriesChanged: () => void;
   onLogout: () => void;
   onOpenGuide: (sectionId?: GuideSectionId) => void;
+  onOpenImport?: () => void;
   disableAllTips: boolean;
   onToggleDisableAllTips: (disabled: boolean) => void;
   onResetFeatureTips: () => void;
@@ -15,8 +23,12 @@ interface Props {
 
 export const SettingsView: React.FC<Props> = ({
   user,
+  accounts,
+  categories,
+  onCategoriesChanged,
   onLogout,
   onOpenGuide,
+  onOpenImport,
   disableAllTips,
   onToggleDisableAllTips,
   onResetFeatureTips,
@@ -27,6 +39,20 @@ export const SettingsView: React.FC<Props> = ({
   const [msg, setMsg] = useState({ text: '', isError: false });
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [catModalOpen, setCatModalOpen] = useState(false);
+  const [catModalType, setCatModalType] = useState<'expense' | 'income'>('expense');
+  const [ruleModalOpen, setRuleModalOpen] = useState(false);
+  const [rules, setRules] = useState<AutoRule[]>([]);
+
+  const loadRules = () => {
+    fetchApi<{ rules: AutoRule[] }>('/api/rules')
+      .then((res) => setRules(res.rules || []))
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    loadRules();
+  }, []);
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,6 +199,113 @@ export const SettingsView: React.FC<Props> = ({
         </div>
       </div>
 
+      {/* 账单导入与 iOS 快捷指令记账 */}
+      <ShortcutTokensCard onOpenImport={onOpenImport} onOpenGuide={onOpenGuide} />
+
+      {/* 收支分类管理 */}
+      <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+            <Tags className="w-4 h-4 text-indigo-500" />
+            <span>收支分类管理</span>
+          </h3>
+          <button
+            type="button"
+            onClick={() => {
+              setCatModalType('expense');
+              setCatModalOpen(true);
+            }}
+            className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition shadow-sm"
+          >
+            添加 / 编辑分类
+          </button>
+        </div>
+
+        <p className="text-xs text-slate-400">
+          支持自定义新增、重命名、更换图标颜色及删除分类（已有流水在删除对应分类后会安全保留为「未分类」）。
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {(['expense', 'income'] as const).map((t) => {
+            const sub = categories.filter((c) => c.type === t);
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => {
+                  setCatModalType(t);
+                  setCatModalOpen(true);
+                }}
+                className="text-left p-3 rounded-2xl bg-slate-50 hover:bg-indigo-50/50 border border-slate-100 hover:border-indigo-200 transition space-y-2"
+              >
+                <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
+                  <span>{t === 'expense' ? '支出分类' : '收入分类'}</span>
+                  <span className="text-[11px] text-slate-400">{sub.length} 项 →</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {sub.slice(0, 6).map((cat) => (
+                    <span
+                      key={cat.id}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-slate-200 text-[11px] text-slate-600"
+                    >
+                      <span
+                        className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-white"
+                        style={{ backgroundColor: cat.color || '#64748B' }}
+                      >
+                        <DynamicIcon name={cat.icon} className="w-2.5 h-2.5" />
+                      </span>
+                      <span>{cat.name}</span>
+                    </span>
+                  ))}
+                  {sub.length > 6 && (
+                    <span className="text-[11px] text-slate-400 self-center">
+                      +{sub.length - 6}
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 自动分类与消费场景规则 */}
+      <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+            <Wand2 className="w-4 h-4 text-indigo-500" />
+            <span>自动分类与场景规则</span>
+          </h3>
+          <button
+            type="button"
+            onClick={() => setRuleModalOpen(true)}
+            className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition shadow-sm"
+          >
+            添加 / 编辑规则
+          </button>
+        </div>
+
+        <p className="text-xs text-slate-400">
+          设置商户/备注关键词规则后，导入微信支付宝账单、快捷指令记账、手写备注及一键整理历史流水都会自动归类并打标消费场景。
+        </p>
+
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-semibold">
+            共 {rules.length} 条规则（启用 {rules.filter((r) => r.enabled === 1).length} 条）
+          </span>
+          {rules.slice(0, 4).map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => setRuleModalOpen(true)}
+              className="px-2.5 py-1 rounded-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-medium transition"
+            >
+              {r.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* 修改密码 */}
       <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-1.5">
@@ -274,6 +407,25 @@ export const SettingsView: React.FC<Props> = ({
         <LogOut className="w-4 h-4" />
         <span>退出当前账号</span>
       </button>
+
+      <CategoryManageModal
+        isOpen={catModalOpen}
+        categories={categories}
+        defaultType={catModalType}
+        onClose={() => setCatModalOpen(false)}
+        onChanged={() => onCategoriesChanged()}
+      />
+
+      <RuleManageModal
+        isOpen={ruleModalOpen}
+        accounts={accounts}
+        categories={categories}
+        onClose={() => setRuleModalOpen(false)}
+        onChanged={() => {
+          loadRules();
+          onCategoriesChanged();
+        }}
+      />
     </div>
   );
 };

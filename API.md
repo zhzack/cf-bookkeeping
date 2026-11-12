@@ -6,11 +6,12 @@
 
 ## 鉴权机制 (Authentication)
 
-系统支持两种鉴权方式：
+系统支持三种鉴权方式：
 1. **Cookie 自动凭证**：浏览器访问登录后，自动携带 `auth_token` HttpOnly Cookie。
-2. **Bearer Token 标头**：适用于快捷指令、Bot 或第三方客户端：
+2. **JWT Bearer 标头**：登录后返回的短期 JWT（30 天有效）。
+3. **长期 API Token（推荐用于 iOS 快捷指令/自动化）**：在「设置」中生成以 `cbk_live_` 开头的个人长期令牌，永不过期、随时可撤销：
    ```http
-   Authorization: Bearer <your_jwt_token>
+   Authorization: Bearer cbk_live_xxxxxxxxxxxxxxxx
    ```
 
 ---
@@ -57,6 +58,12 @@
 
 #### 1.4 获取当前用户信息
 - **接口**：`GET /api/auth/me`
+- **需鉴权**
+
+#### 1.5 长期 API Token 管理（iOS 快捷指令）
+- **列表**：`GET /api/auth/tokens`
+- **创建**：`POST /api/auth/tokens`（可选 `{ "name": "iPhone 快捷指令" }`，返回一次完整 `cbk_live_...` 令牌）
+- **撤销**：`DELETE /api/auth/tokens/:id`
 - **需鉴权**
 
 ---
@@ -159,6 +166,36 @@
   ```
 - **说明**：自动创建 `items` 记录、绑定 `transactions.item_id`，并将 `exclude_daily_cost` 设为 `1`，避免与持物大件日均成本重复统计。
 
+#### 2.7 iOS 快捷指令极速记账
+- **接口**：`POST /api/transactions/quick`
+- **需鉴权**（强烈建议配合长期 `cbk_live_` Token）
+- **请求体（所有字段均为友好名称或可自动解析，金额默认单位为元）**：
+  ```json
+  {
+    "amount": 18.5, // 单位：元（也支持传入 text 自动提取，或 unit: "cents"）
+    "type": "expense", // 可选：'expense' | 'income' | 'transfer'，默认 'expense' 或由 text 自动判断
+    "account": "微信", // 可选：账户名称/关键词/ID，自动匹配用户账户
+    "category": "餐饮美食", // 可选：分类名称/关键词/ID，不传则按 remark/text 关键词智能匹配
+    "remark": "瑞幸咖啡",
+    "text": "微信支付 向 瑞幸咖啡 付款 ¥18.50", // 可选：直接传支付截屏 OCR 提取文本
+    "amortize_days": 30, // 可选：定期账单分摊天数
+    "external_id": "shortcut_20261112_001" // 可选：幂等去重键
+  }
+  ```
+
+#### 2.8 批量账单导入与去重检查（微信/支付宝）
+- **去重查询**：`POST /api/transactions/import/check-duplicates`（传入 `{ "external_ids": ["wx:xxx", "ali:yyy"] }`，返回 `{ "existing_ids": [...] }`）
+- **批量导入**：`POST /api/transactions/import`（传入 `{ "rows": [...] }`，单批最多 500 条，自动跳过重复 `external_id`，支持携带 `scene`）
+- **需鉴权**
+
+#### 2.9 搜索过滤、消费场景与批量改分类
+- **搜索与多条件过滤**：`GET /api/transactions` 支持 `month`（支持 `all`）、`start_date` / `end_date`、`search`（匹配备注/分类/账户/大件/场景/金额）、`type`、`category_id`（支持 `__uncategorized__`）、`account_id`、`scene`（支持 `__none__`）、`sort`（`time_desc` / `amount_desc`）。
+- **常用场景列表**：`GET /api/transactions/scenes`
+- **单笔标场景**：`PATCH /api/transactions/:id/scene`（传入 `{ "scene": "日常三餐" }` 或 `null` 清空）
+- **批量标场景**：`PATCH /api/transactions/batch-scene`（支持 `scope`: `'ids' | 'category' | 'account' | 'account_category' | 'remark' | 'filter'`，支持 `preview: true` 预览影响笔数）
+- **批量改分类**：`PATCH /api/transactions/batch-category`（支持 `scope`: `'ids' | 'category' | 'account' | 'account_category' | 'remark' | 'filter'`、`target_category_id`、`only_uncategorized` 及 `preview: true`，自动按目标分类收支类型隔离防护）
+- **需鉴权**
+
 ---
 
 ### 3. 账户管理接口 (Accounts)
@@ -194,6 +231,12 @@
 - **接口**：`GET /api/categories`
 - **需鉴权**
 - **Query 参数**：`type` (`expense` 或 `income`)
+
+#### 4.2 新增 / 编辑 / 删除分类
+- **新增**：`POST /api/categories`（`{ "name", "type": "expense" | "income", "icon", "color" }`）
+- **编辑**：`PUT /api/categories/:id`（`{ "name", "icon", "color" }`，支持局部更新）
+- **删除**：`DELETE /api/categories/:id`（删除前自动将关联流水 `category_id` 安全置空为未分类）
+- **需鉴权**
 
 ---
 
@@ -291,12 +334,26 @@
 
 ### 6. 统计报表接口 (Stats)
 
-#### 6.1 获取当月财务概览与报表
+#### 6.1 获取多周期财务概览与报表（周 / 月 / 年）
 - **接口**：`GET /api/stats/overview`
 - **需鉴权**
 - **Query 参数**：
-  - `month` (可选，默认当月，如 `2026-11`)
+  - `period` (可选，`'week' | 'month' | 'year'`，默认 `'month'`)
+  - `date` / `month` (可选，周传 `YYYY-MM-DD`，月传 `YYYY-MM`，年传 `YYYY`)
   - `today` (可选，本地当前日期 `YYYY-MM-DD`，用于计算当月已过天数)
+- **返回补充**：除 `category_breakdown` 与 `daily_cost` 外，额外返回 `trend`（按周/月为逐日、按年为逐月）与 `scene_breakdown`（按消费场景聚合统计）。
+
+---
+
+### 7. 自动分类与场景规则接口 (Rules)
+
+- **获取规则列表**：`GET /api/rules`（按 `priority DESC` 排序返回）
+- **新增规则**：`POST /api/rules`（`{ "name", "tx_type": "all" | "expense" | "income", "keywords", "match_mode": "contains" | "exact", "account_id", "category_id", "scene", "priority", "enabled" }`）
+- **编辑规则**：`PUT /api/rules/:id`
+- **删除规则**：`DELETE /api/rules/:id`
+- **应用单条规则到历史流水**：`POST /api/rules/:id/apply`（支持 `{ "preview": true, "overwrite": false, "month" }`)
+- **一键应用全部启用规则**：`POST /api/rules/apply-all`（支持 `{ "preview": true, "overwrite": false, "month" }`)
+- **需鉴权**
 - **返回示例**：
   ```json
   {

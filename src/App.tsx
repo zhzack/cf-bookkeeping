@@ -25,6 +25,7 @@ import { SetupWizard } from './components/SetupWizard';
 import { LoginPage } from './components/LoginPage';
 import { TransactionModal } from './components/TransactionModal';
 import { ConvertToItemModal } from './components/ConvertToItemModal';
+import { BillImportModal } from './components/BillImportModal';
 import { AccountModal } from './components/AccountModal';
 import { ItemModal } from './components/ItemModal';
 import { UserGuideModal } from './components/UserGuideModal';
@@ -49,6 +50,7 @@ export function App() {
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [convertingTx, setConvertingTx] = useState<Transaction | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
@@ -118,7 +120,7 @@ export function App() {
     let candidate: FeatureTipKey | null = null;
     if (isTxModalOpen) {
       candidate = 'tx_modal';
-    } else if (!isItemModalOpen && !isAccountModalOpen && !convertingTx) {
+    } else if (!isItemModalOpen && !isAccountModalOpen && !convertingTx && !isImportModalOpen) {
       if (activeTab === 'transactions' || activeTab === 'items' || activeTab === 'stats' || activeTab === 'accounts') {
         candidate = activeTab;
       }
@@ -138,6 +140,7 @@ export function App() {
     isItemModalOpen,
     isAccountModalOpen,
     convertingTx,
+    isImportModalOpen,
   ]);
 
   const openGuideModal = (section: GuideSectionId = 'periodic-bills') => {
@@ -339,7 +342,11 @@ export function App() {
             onConvertToItem={(tx) => {
               setConvertingTx(tx);
             }}
+            onOpenImport={() => setIsImportModalOpen(true)}
+            accounts={accounts}
+            categories={categories}
             refreshTrigger={refreshTrigger}
+            onCategoriesChanged={triggerRefresh}
           />
         )}
 
@@ -360,7 +367,15 @@ export function App() {
           />
         )}
 
-        {activeTab === 'stats' && <StatsView refreshTrigger={refreshTrigger} />}
+        {activeTab === 'stats' && (
+          <StatsView
+            refreshTrigger={refreshTrigger}
+            onEditTransaction={(tx) => {
+              setEditingTx(tx);
+              setIsTxModalOpen(true);
+            }}
+          />
+        )}
 
         {activeTab === 'accounts' && (
           <AccountsView
@@ -379,8 +394,12 @@ export function App() {
         {activeTab === 'settings' && (
           <SettingsView
             user={user}
+            accounts={accounts}
+            categories={categories}
+            onCategoriesChanged={triggerRefresh}
             onLogout={handleLogout}
             onOpenGuide={(sec) => openGuideModal(sec || 'periodic-bills')}
+            onOpenImport={() => setIsImportModalOpen(true)}
             disableAllTips={guidePrefs.disableAllTips}
             onToggleDisableAllTips={(disabled) => {
               setGuidePrefs(setDisableAllFeatureTips(user.id, disabled));
@@ -473,6 +492,7 @@ export function App() {
         onSuccess={triggerRefresh}
         accounts={accounts}
         categories={categories}
+        onCategoriesChanged={triggerRefresh}
         initialData={editingTx}
         onConvertToItem={(tx) => {
           setIsTxModalOpen(false);
@@ -486,6 +506,15 @@ export function App() {
         isOpen={Boolean(convertingTx)}
         transaction={convertingTx}
         onClose={() => setConvertingTx(null)}
+        onSuccess={triggerRefresh}
+      />
+
+      {/* 微信 / 支付宝账单批量导入弹窗 */}
+      <BillImportModal
+        isOpen={isImportModalOpen}
+        accounts={accounts}
+        categories={categories}
+        onClose={() => setIsImportModalOpen(false)}
         onSuccess={triggerRefresh}
       />
 
