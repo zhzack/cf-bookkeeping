@@ -6,15 +6,29 @@ import {
   Wallet, 
   Settings as SettingsIcon, 
   Plus, 
-  Sparkles 
+  Sparkles,
+  BookOpen
 } from 'lucide-react';
 import { fetchApi } from './api';
 import { User, Account, Category, Transaction, ItemWithStats } from './types';
+import {
+  FEATURE_TIPS,
+  FeatureTipKey,
+  GuidePreferences,
+  GuideSectionId,
+  loadGuidePrefs,
+  markFeatureTipDismissed,
+  resetAllFeatureTips,
+  setDisableAllFeatureTips,
+} from './data/userGuide';
 import { SetupWizard } from './components/SetupWizard';
 import { LoginPage } from './components/LoginPage';
 import { TransactionModal } from './components/TransactionModal';
+import { ConvertToItemModal } from './components/ConvertToItemModal';
 import { AccountModal } from './components/AccountModal';
 import { ItemModal } from './components/ItemModal';
+import { UserGuideModal } from './components/UserGuideModal';
+import { FeatureTipModal } from './components/FeatureTipModal';
 import { TransactionsView } from './views/TransactionsView';
 import { ItemsView } from './views/ItemsView';
 import { StatsView } from './views/StatsView';
@@ -34,11 +48,18 @@ export function App() {
   // Modals
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
+  const [convertingTx, setConvertingTx] = useState<Transaction | null>(null);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<ItemWithStats | null>(null);
   const [isWishlistDefault, setIsWishlistDefault] = useState(false);
+
+  // 使用说明 & 首次功能引导状态
+  const [guidePrefs, setGuidePrefs] = useState<GuidePreferences>(() => loadGuidePrefs(null));
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [guideSection, setGuideSection] = useState<GuideSectionId>('periodic-bills');
+  const [activeFeatureTipKey, setActiveFeatureTipKey] = useState<FeatureTipKey | null>(null);
 
   // 1. 检查系统状态 (是否需要首次配置) 与用户登录状态
   const checkStatus = async () => {
@@ -83,6 +104,47 @@ export function App() {
     loadBaseData();
   }, [user, refreshTrigger]);
 
+  useEffect(() => {
+    setGuidePrefs(loadGuidePrefs(user?.id));
+  }, [user?.id]);
+
+  // 首次打开对应功能模块时，展示操作介绍（支持“以后再也不提示”）
+  useEffect(() => {
+    if (!user || isGuideOpen || guidePrefs.disableAllTips) {
+      setActiveFeatureTipKey(null);
+      return;
+    }
+
+    let candidate: FeatureTipKey | null = null;
+    if (isTxModalOpen) {
+      candidate = 'tx_modal';
+    } else if (!isItemModalOpen && !isAccountModalOpen && !convertingTx) {
+      if (activeTab === 'transactions' || activeTab === 'items' || activeTab === 'stats' || activeTab === 'accounts') {
+        candidate = activeTab;
+      }
+    }
+
+    if (candidate && !guidePrefs.dismissedFeatures[candidate]) {
+      setActiveFeatureTipKey(candidate);
+    } else {
+      setActiveFeatureTipKey(null);
+    }
+  }, [
+    user,
+    isGuideOpen,
+    guidePrefs,
+    activeTab,
+    isTxModalOpen,
+    isItemModalOpen,
+    isAccountModalOpen,
+    convertingTx,
+  ]);
+
+  const openGuideModal = (section: GuideSectionId = 'periodic-bills') => {
+    setGuideSection(section);
+    setIsGuideOpen(true);
+  };
+
   const triggerRefresh = () => setRefreshTrigger((prev) => prev + 1);
 
   const handleLogout = async () => {
@@ -92,6 +154,25 @@ export function App() {
       setUser(null);
     }
   };
+
+  const userGuideModalNode = (
+    <UserGuideModal
+      isOpen={isGuideOpen}
+      initialSection={guideSection}
+      disableAllTips={guidePrefs.disableAllTips}
+      onToggleDisableAllTips={(disabled) => {
+        setGuidePrefs(setDisableAllFeatureTips(user?.id, disabled));
+      }}
+      onResetFeatureTips={
+        user
+          ? () => {
+              setGuidePrefs(resetAllFeatureTips(user.id));
+            }
+          : undefined
+      }
+      onClose={() => setIsGuideOpen(false)}
+    />
+  );
 
   if (initLoading) {
     return (
@@ -107,25 +188,37 @@ export function App() {
   // 首次部署：引导设置管理员
   if (needSetup) {
     return (
-      <SetupWizard
-        onSuccess={(u) => {
-          setUser(u);
-          setNeedSetup(false);
-          triggerRefresh();
-        }}
-      />
+      <>
+        <SetupWizard
+          onSuccess={(u, openGuideAfterSetup) => {
+            setUser(u);
+            setNeedSetup(false);
+            setGuidePrefs(loadGuidePrefs(u.id));
+            if (openGuideAfterSetup) {
+              openGuideModal('periodic-bills');
+            }
+            triggerRefresh();
+          }}
+          onOpenGuide={() => openGuideModal('periodic-bills')}
+        />
+        {userGuideModalNode}
+      </>
     );
   }
 
   // 未登录状态：展示账号密码登录表单
   if (!user) {
     return (
-      <LoginPage
-        onSuccess={(u) => {
-          setUser(u);
-          triggerRefresh();
-        }}
-      />
+      <>
+        <LoginPage
+          onSuccess={(u) => {
+            setUser(u);
+            triggerRefresh();
+          }}
+          onOpenGuide={() => openGuideModal('periodic-bills')}
+        />
+        {userGuideModalNode}
+      </>
     );
   }
 
@@ -186,6 +279,15 @@ export function App() {
 
           <div className="flex items-center gap-2">
             <button
+              type="button"
+              onClick={() => openGuideModal('periodic-bills')}
+              className="px-3 py-2 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition"
+              title="查看使用说明"
+            >
+              <BookOpen className="w-4 h-4" />
+              <span>使用说明</span>
+            </button>
+            <button
               onClick={() => {
                 setEditingTx(null);
                 setIsTxModalOpen(true);
@@ -207,9 +309,19 @@ export function App() {
           </div>
           <span className="font-bold text-slate-800 text-sm">小记</span>
         </div>
-        <span className="text-xs font-semibold text-slate-400">
-          {activeTab === 'transactions' ? '流水明细' : activeTab === 'items' ? '大件日均' : activeTab === 'stats' ? '财务统计' : activeTab === 'accounts' ? '账户管理' : '个人设置'}
-        </span>
+        <div className="flex items-center gap-2.5">
+          <span className="text-xs font-semibold text-slate-400">
+            {activeTab === 'transactions' ? '流水明细' : activeTab === 'items' ? '大件日均' : activeTab === 'stats' ? '财务统计' : activeTab === 'accounts' ? '账户管理' : '个人设置'}
+          </span>
+          <button
+            type="button"
+            onClick={() => openGuideModal('periodic-bills')}
+            className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-600 text-[11px] font-semibold flex items-center gap-1"
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>使用说明</span>
+          </button>
+        </div>
       </div>
 
       {/* 主视图内容区域 */}
@@ -223,6 +335,9 @@ export function App() {
             onEditTransaction={(tx) => {
               setEditingTx(tx);
               setIsTxModalOpen(true);
+            }}
+            onConvertToItem={(tx) => {
+              setConvertingTx(tx);
             }}
             refreshTrigger={refreshTrigger}
           />
@@ -261,7 +376,20 @@ export function App() {
           />
         )}
 
-        {activeTab === 'settings' && <SettingsView user={user} onLogout={handleLogout} />}
+        {activeTab === 'settings' && (
+          <SettingsView
+            user={user}
+            onLogout={handleLogout}
+            onOpenGuide={(sec) => openGuideModal(sec || 'periodic-bills')}
+            disableAllTips={guidePrefs.disableAllTips}
+            onToggleDisableAllTips={(disabled) => {
+              setGuidePrefs(setDisableAllFeatureTips(user.id, disabled));
+            }}
+            onResetFeatureTips={() => {
+              setGuidePrefs(resetAllFeatureTips(user.id));
+            }}
+          />
+        )}
       </main>
 
       {/* 移动端底部 Tab 导航栏 */}
@@ -346,6 +474,19 @@ export function App() {
         accounts={accounts}
         categories={categories}
         initialData={editingTx}
+        onConvertToItem={(tx) => {
+          setIsTxModalOpen(false);
+          setEditingTx(null);
+          setConvertingTx(tx);
+        }}
+      />
+
+      {/* 将已有开销转为持物大件弹窗 */}
+      <ConvertToItemModal
+        isOpen={Boolean(convertingTx)}
+        transaction={convertingTx}
+        onClose={() => setConvertingTx(null)}
+        onSuccess={triggerRefresh}
       />
 
       {/* 账户弹窗 (新增 / 编辑) */}
@@ -371,6 +512,30 @@ export function App() {
         accounts={accounts}
         defaultWishlist={isWishlistDefault}
       />
+
+      {/* 首次进入功能的详细提示弹窗 */}
+      <FeatureTipModal
+        tip={activeFeatureTipKey ? FEATURE_TIPS[activeFeatureTipKey] : null}
+        onDismissOnce={() => {
+          if (!activeFeatureTipKey) return;
+          setGuidePrefs(markFeatureTipDismissed(user.id, activeFeatureTipKey));
+          setActiveFeatureTipKey(null);
+        }}
+        onDisableForever={() => {
+          setGuidePrefs(setDisableAllFeatureTips(user.id, true));
+          setActiveFeatureTipKey(null);
+        }}
+        onOpenFullGuide={(sectionId) => {
+          if (activeFeatureTipKey) {
+            setGuidePrefs(markFeatureTipDismissed(user.id, activeFeatureTipKey));
+          }
+          setActiveFeatureTipKey(null);
+          openGuideModal(sectionId);
+        }}
+      />
+
+      {/* 完整使用说明书 */}
+      {userGuideModalNode}
     </div>
   );
 }

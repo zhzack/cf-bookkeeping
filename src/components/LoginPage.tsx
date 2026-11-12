@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
-import { Lock, User as UserIcon, LogIn, Sparkles } from 'lucide-react';
+import { Lock, User as UserIcon, LogIn, Sparkles, BookOpen } from 'lucide-react';
 import { fetchApi } from '../api';
 import { User } from '../types';
 
 interface Props {
   onSuccess: (user: User) => void;
+  onOpenGuide?: () => void;
 }
 
-export const LoginPage: React.FC<Props> = ({ onSuccess }) => {
+export const LoginPage: React.FC<Props> = ({ onSuccess, onOpenGuide }) => {
   const [username, setUsername] = useState(() => localStorage.getItem('last_username') || '');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -89,7 +90,7 @@ export const LoginPage: React.FC<Props> = ({ onSuccess }) => {
             </div>
           </div>
 
-          <div className="pt-2">
+          <div className="pt-2 space-y-2">
             <button
               type="submit"
               disabled={loading}
@@ -98,6 +99,17 @@ export const LoginPage: React.FC<Props> = ({ onSuccess }) => {
               <LogIn className="w-4 h-4" />
               <span>{loading ? '正在登录...' : '登 录'}</span>
             </button>
+
+            {onOpenGuide && (
+              <button
+                type="button"
+                onClick={onOpenGuide}
+                className="w-full py-2 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 rounded-xl flex items-center justify-center gap-1.5 transition"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>查看详细使用说明</span>
+              </button>
+            )}
           </div>
         </form>
       </div>

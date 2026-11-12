@@ -1,17 +1,19 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Sparkles, Lock, User as UserIcon } from 'lucide-react';
+import { ShieldCheck, Sparkles, Lock, User as UserIcon, BookOpen } from 'lucide-react';
 import { fetchApi } from '../api';
 import { User } from '../types';
 
 interface Props {
-  onSuccess: (user: User) => void;
+  onSuccess: (user: User, openGuideAfterSetup?: boolean) => void;
+  onOpenGuide?: () => void;
 }
 
-export const SetupWizard: React.FC<Props> = ({ onSuccess }) => {
+export const SetupWizard: React.FC<Props> = ({ onSuccess, onOpenGuide }) => {
   const [username, setUsername] = useState('admin');
   const [nickname, setNickname] = useState('生活家');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [openGuideAfterSetup, setOpenGuideAfterSetup] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -42,7 +44,7 @@ export const SetupWizard: React.FC<Props> = ({ onSuccess }) => {
           password,
         }),
       });
-      onSuccess(data.user);
+      onSuccess(data.user, openGuideAfterSetup);
     } catch (err: any) {
       setError(err.message || '初始化失败，请重试');
     } finally {
@@ -125,7 +127,17 @@ export const SetupWizard: React.FC<Props> = ({ onSuccess }) => {
             </div>
           </div>
 
-          <div className="pt-2">
+          <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none pt-1">
+            <input
+              type="checkbox"
+              checked={openGuideAfterSetup}
+              onChange={(e) => setOpenGuideAfterSetup(e.target.checked)}
+              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span>注册完成后立即打开详细使用说明（推荐新手阅读）</span>
+          </label>
+
+          <div className="pt-2 space-y-2">
             <button
               type="submit"
               disabled={loading}
@@ -134,6 +146,17 @@ export const SetupWizard: React.FC<Props> = ({ onSuccess }) => {
               <ShieldCheck className="w-5 h-5" />
               <span>{loading ? '正在初始化并创建预置数据...' : '完成设置并开启记账'}</span>
             </button>
+
+            {onOpenGuide && (
+              <button
+                type="button"
+                onClick={onOpenGuide}
+                className="w-full py-2.5 bg-indigo-50/80 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition"
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>先阅读详细使用说明（定期账单 / 生活成本 / 大件管理）</span>
+              </button>
+            )}
           </div>
         </form>
 

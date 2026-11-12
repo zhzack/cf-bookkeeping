@@ -1,14 +1,26 @@
 import React, { useState } from 'react';
-import { User as UserIcon, Lock, Download, LogOut, Check, Shield, Cloud } from 'lucide-react';
+import { Lock, Download, LogOut, Cloud, BookOpen, Bell, BellOff, RotateCcw } from 'lucide-react';
 import { fetchApi } from '../api';
 import { User, Transaction, Account, Category } from '../types';
+import { GuideSectionId } from '../data/userGuide';
 
 interface Props {
   user: User;
   onLogout: () => void;
+  onOpenGuide: (sectionId?: GuideSectionId) => void;
+  disableAllTips: boolean;
+  onToggleDisableAllTips: (disabled: boolean) => void;
+  onResetFeatureTips: () => void;
 }
 
-export const SettingsView: React.FC<Props> = ({ user, onLogout }) => {
+export const SettingsView: React.FC<Props> = ({
+  user,
+  onLogout,
+  onOpenGuide,
+  disableAllTips,
+  onToggleDisableAllTips,
+  onResetFeatureTips,
+}) => {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -88,6 +100,76 @@ export const SettingsView: React.FC<Props> = ({ user, onLogout }) => {
         <div>
           <h2 className="text-base font-bold text-slate-800">{user.nickname || user.username}</h2>
           <p className="text-xs text-slate-400 mt-0.5">账号: @{user.username}</p>
+        </div>
+      </div>
+
+      {/* 使用说明与首次功能介绍提醒 */}
+      <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-3.5">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+            <BookOpen className="w-4 h-4 text-indigo-500" />
+            <span>使用说明与功能引导</span>
+          </h3>
+        </div>
+
+        <p className="text-xs text-slate-500 leading-relaxed">
+          包含定期支付账单记法（房租/宽带/订阅分摊）、每日生活成本计算口径、记账拍照与持物大件管理详细教程。
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <button
+            type="button"
+            onClick={() => onOpenGuide('periodic-bills')}
+            className="py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 transition shadow-sm"
+          >
+            <BookOpen className="w-4 h-4" />
+            <span>打开完整使用说明</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onOpenGuide('items-wishlist')}
+            className="py-2.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 transition"
+          >
+            <span>查看大件 & 心愿单指南</span>
+          </button>
+        </div>
+
+        <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 text-xs text-slate-600">
+            {disableAllTips ? (
+              <BellOff className="w-4 h-4 text-slate-400" />
+            ) : (
+              <Bell className="w-4 h-4 text-emerald-500" />
+            )}
+            <span>
+              首次进入功能自动弹窗介绍：
+              <strong className={disableAllTips ? 'text-slate-500' : 'text-emerald-600'}>
+                {disableAllTips ? ' 已关闭' : ' 已开启'}
+              </strong>
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onToggleDisableAllTips(!disableAllTips)}
+              className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition"
+            >
+              {disableAllTips ? '重新开启提醒' : '以后不再自动提醒'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onResetFeatureTips();
+                alert('已重置所有页面的首次引导提示，下次进入对应页面将重新为您展示。');
+              }}
+              className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 text-[11px] font-medium flex items-center gap-1 transition"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>重置提示记录</span>
+            </button>
+          </div>
         </div>
       </div>
 
