@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { getCookie } from 'hono/cookie';
+import { verify } from 'hono/jwt';
 import { Env, UserSession } from '../types';
 import { requireAuth } from '../auth';
 
@@ -6,6 +8,7 @@ export const shortcutsRouter = new Hono<{ Bindings: Env; Variables: { user: User
 
 interface ShortcutRow {
   id: string;
+  user_id?: string | null;
   name: string;
   description: string;
   version: string;
@@ -20,13 +23,50 @@ interface ShortcutRow {
   updated_at: string;
 }
 
-// 1. 查询默认/指定快捷指令元信息与发布状态
+const DEFAULT_JWT_SECRET = 'cf-bookkeeping-production-jwt-secret-key-2026';
+
+// 1. 查询当前用户的快捷指令配置（优先返回该用户的个人专属 iCloud 链接，若无则自动回退到系统官方共享链接）
 shortcutsRouter.get('/current', async (c) => {
-  const row = await c.env.DB.prepare(
-    'SELECT * FROM shortcuts WHERE id = ? LIMIT 1'
-  )
-    .bind('sc_cf_bookkeeping')
-    .first<ShortcutRow>();
+  let userId: string | null = null;
+  try {
+    const token = getCookie(c, 'auth_token');
+    if (token) {
+      const payload = await verify(token, c.env.JWT_SECRET || DEFAULT_JWT_SECRET, 'HS256');
+      if (payload && payload.sub) {
+        userId = String(payload.sub);
+      }
+    }
+  } catch {
+    // ignore unauthenticated
+  }
+
+  let row: ShortcutRow | null = null;
+  let isPersonal = false;
+
+  // 1. 优先查用户的个人专属覆盖
+  if (userId) {
+    row = await c.env.DB.prepare(
+      'SELECT * FROM shortcuts WHERE user_id = ? LIMIT 1'
+    )
+      .bind(userId)
+      .first<ShortcutRow>();
+    if (row && row.icloud_share_url) {
+      isPersonal = true;
+    }
+  }
+
+  // 2. 无个人覆盖时，回退至全局官方记录
+  if (!row || !row.icloud_share_url) {
+    const globalRow = await c.env.DB.prepare(
+      'SELECT * FROM shortcuts WHERE id = ? LIMIT 1'
+    )
+      .bind('sc_cf_bookkeeping')
+      .first<ShortcutRow>();
+    if (globalRow) {
+      row = globalRow;
+      isPersonal = false;
+    }
+  }
 
   if (!row) {
     return c.json({ error: '未找到快捷指令配置' }, 404);
@@ -44,6 +84,7 @@ shortcutsRouter.get('/current', async (c) => {
     generation_status: row.generation_status,
     sharing_type: row.icloud_share_url ? 'icloud' : 'guide',
     icloud_share_url: row.icloud_share_url,
+    is_personal: isPersonal,
     download_count: row.download_count,
     download_url: `${host}/api/v1/shortcuts/${row.id}/download`,
     created_at: row.created_at,
@@ -64,7 +105,7 @@ shortcutsRouter.get('/:id', async (c) => {
   return c.json(row);
 });
 
-// 2. 获取可用的分享链接 (模式 B：只有真实创建的 iCloud 链接才会标记为 icloud 模式)
+// 2. 获取可用的分享链接
 shortcutsRouter.get('/:id/share', async (c) => {
   const id = c.req.param('id');
   const row = await c.env.DB.prepare('SELECT * FROM shortcuts WHERE id = ?')
@@ -91,7 +132,39 @@ shortcutsRouter.get('/:id/share', async (c) => {
   });
 });
 
-// 3. 绑定/更新官方 iCloud 分享链接（需登录，严格校验 Apple iCloud 链接格式）
+// 3. 设置/更新个人专属 iCloud 分享链接 (用户级别覆盖)
+shortcutsRouter.post('/my/icloud-url', requireAuth, async (c) => {
+  const user = c.get('user');
+  const { url } = await c.req.json();
+  const trimmed = typeof url === 'string' ? url.trim() : '';
+
+  if (trimmed) {
+    if (!/^https:\/\/www\.icloud\.com\/shortcuts\/[a-zA-Z0-9_\-]+$/.test(trimmed)) {
+      return c.json({
+        error: '无效的 iCloud 快捷指令链接格式，格式须为 https://www.icloud.com/shortcuts/xxxxxxxx',
+      }, 400);
+    }
+
+    const personalId = `sc_usr_${user.id}`;
+    await c.env.DB.prepare(
+      `INSERT INTO shortcuts (id, user_id, name, description, version, signing_status, generation_status, sharing_type, icloud_share_url)
+       VALUES (?, ?, ?, '个人专属随手记账', '1.0.0', 'unsigned', 'ready', 'icloud', ?)
+       ON CONFLICT(id) DO UPDATE SET icloud_share_url = ?, sharing_type = 'icloud', updated_at = CURRENT_TIMESTAMP`
+    )
+      .bind(personalId, user.id, `${user.nickname || user.username}的随手记账`, trimmed, trimmed)
+      .run();
+
+    return c.json({ success: true, icloud_share_url: trimmed, is_personal: true });
+  } else {
+    // 清空个人专属链接，回退到全局官方链接
+    await c.env.DB.prepare('DELETE FROM shortcuts WHERE user_id = ?')
+      .bind(user.id)
+      .run();
+    return c.json({ success: true, icloud_share_url: null, is_personal: false });
+  }
+});
+
+// 4. 绑定/更新系统官方共享 iCloud 链接 (系统全局级别)
 shortcutsRouter.post('/:id/icloud-url', requireAuth, async (c) => {
   const id = c.req.param('id');
   const { url } = await c.req.json();
@@ -127,7 +200,7 @@ shortcutsRouter.post('/:id/icloud-url', requireAuth, async (c) => {
   }
 });
 
-// 4. 下载 .shortcut 文件（模式 A：直接下载已封装好当前服务端配置的文件）
+// 5. 下载 .shortcut 文件 (模式 A：直接下载已封装好配置的文件)
 shortcutsRouter.get('/:id/download', async (c) => {
   const id = c.req.param('id');
   const token = c.req.query('token') || '';
@@ -135,7 +208,6 @@ shortcutsRouter.get('/:id/download', async (c) => {
   const host = `${reqUrl.protocol}//${reqUrl.host}`;
   const endpoint = `${host}/api/transactions/quick`;
 
-  // 累加下载次数
   try {
     const updatePromise = c.env.DB.prepare(
       'UPDATE shortcuts SET download_count = download_count + 1 WHERE id = ?'
@@ -224,18 +296,19 @@ shortcutsRouter.get('/:id/download', async (c) => {
   return c.body(plistXml);
 });
 
-// 5. 生成接口 POST /api/v1/shortcuts/generate
+// 6. 生成接口 POST /api/v1/shortcuts/generate
 shortcutsRouter.post('/generate', requireAuth, async (c) => {
+  const user = c.get('user');
   const body = await c.req.json();
   const name = typeof body?.name === 'string' && body.name.trim() ? body.name.trim() : '随手记账';
   const description = typeof body?.description === 'string' ? body.description.trim() : '';
 
   const shortcutId = 'sc_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
   await c.env.DB.prepare(
-    `INSERT INTO shortcuts (id, name, description, version, signing_status, generation_status, sharing_type)
-     VALUES (?, ?, ?, '1.0.0', 'unsigned', 'ready', 'guide')`
+    `INSERT INTO shortcuts (id, user_id, name, description, version, signing_status, generation_status, sharing_type)
+     VALUES (?, ?, ?, ?, '1.0.0', 'unsigned', 'ready', 'guide')`
   )
-    .bind(shortcutId, name, description)
+    .bind(shortcutId, user.id, name, description)
     .run();
 
   const reqUrl = new URL(c.req.url);

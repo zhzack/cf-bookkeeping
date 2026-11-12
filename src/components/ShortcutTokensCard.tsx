@@ -55,6 +55,7 @@ interface ShortcutRelease {
   sharing_type: string;
   icloud_share_url: string | null;
   download_count: number;
+  is_personal?: boolean;
 }
 
 const SHORTCUT_TEMPLATES = [
@@ -196,12 +197,32 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
     window.location.href = 'shortcuts://create-shortcut';
   };
 
-  const handleSaveICloudUrlToDb = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveICloudUrlToDb = async (scope: 'global' | 'personal') => {
+    if (!icloudInput.trim() && scope === 'personal') {
+      // 清空个人覆盖
+      setSavingICloud(true);
+      try {
+        await fetchApi('/api/v1/shortcuts/my/icloud-url', {
+          method: 'POST',
+          body: JSON.stringify({ url: '' }),
+        });
+        await loadRelease();
+        alert('已清除个人专属覆盖，自动恢复为全站官方共享链接。');
+      } finally {
+        setSavingICloud(false);
+      }
+      return;
+    }
+
     setSavingICloud(true);
     try {
+      const endpoint =
+        scope === 'personal'
+          ? '/api/v1/shortcuts/my/icloud-url'
+          : '/api/v1/shortcuts/sc_cf_bookkeeping/icloud-url';
+
       const res = await fetchApi<{ success: boolean; icloud_share_url: string | null }>(
-        '/api/v1/shortcuts/sc_cf_bookkeeping/icloud-url',
+        endpoint,
         {
           method: 'POST',
           body: JSON.stringify({ url: icloudInput.trim() }),
@@ -210,8 +231,10 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
       await loadRelease();
       alert(
         res.icloud_share_url
-          ? '🎉 官方 iCloud 分享链接已成功绑定并同步！所有移动端用户点击「添加到 iPhone」将直接通过苹果官方流程安装。'
-          : '已重置 iCloud 分享链接为向导模式'
+          ? scope === 'personal'
+            ? '🎉 个人专属 iCloud 分享链接已保存！当前账号将优先使用此链接安装。'
+            : '🎉 全站官方 iCloud 分享链接已更新！所有用户均可直接一键安装此模板。'
+          : '已重置链接为向导模式'
       );
     } catch (err: any) {
       alert(err?.message || '保存失败');
@@ -574,55 +597,68 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
           </div>
         )}
 
-        {/* 绑定/同步官方 Apple iCloud 分享链接 (模式 B 配置后台) */}
+        {/* 绑定/同步 Apple iCloud 分享链接 (模式 B 配置后台) */}
         <div className="p-3.5 rounded-2xl bg-white/70 border border-slate-200/70 space-y-2 text-xs">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="font-bold text-slate-800 flex items-center gap-1.5">
               <Link2 className="w-4 h-4 text-indigo-600" />
-              <span>绑定官方认证的 Apple iCloud 分享链接 (模式 B)</span>
+              <span>绑定 Apple iCloud 分享链接 (模式 B)</span>
             </div>
-            {hasOfficialICloud && (
-              <span className="text-[10px] text-emerald-700 font-semibold px-2 py-0.5 bg-emerald-50 rounded-full border border-emerald-200">
-                已生效全员可用
+            {release?.is_personal ? (
+              <span className="text-[10px] text-purple-700 font-semibold px-2 py-0.5 bg-purple-50 rounded-full border border-purple-200">
+                👤 正在使用个人专属覆盖
               </span>
-            )}
+            ) : hasOfficialICloud ? (
+              <span className="text-[10px] text-emerald-700 font-semibold px-2 py-0.5 bg-emerald-50 rounded-full border border-emerald-200">
+                🌐 已生效全员官方共享
+              </span>
+            ) : null}
           </div>
           <p className="text-[11px] text-slate-500 leading-normal">
-            按苹果规范，禁止由第三方服务器伪造虚拟链接。在 iPhone / Mac 上制作好「随手记账」后，点击右上角「分享」→「拷贝 iCloud 链接」填入下方并保存。系统将同步更新至数据库，后续任何用户点击「添加到 iPhone」都将 100% 成功唤起苹果官方安装流程！
+            按苹果规范，外部分享链接须由 Apple 设备生成。制作好「随手记账」后，点击右上角「分享」→「拷贝 iCloud 链接」填入并保存：
           </p>
 
-          <form onSubmit={handleSaveICloudUrlToDb} className="flex gap-2">
+          <div className="space-y-2">
             <input
               type="text"
               value={icloudInput}
               onChange={(e) => setIcloudInput(e.target.value)}
               placeholder="https://www.icloud.com/shortcuts/xxxxxxxxxxxxxxxxxxxxxxxx"
-              className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-[11px] font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-[11px] font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
-            <button
-              type="submit"
-              disabled={savingICloud}
-              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1 transition disabled:opacity-60 flex-shrink-0"
-            >
-              <span>{savingICloud ? '同步中...' : '保存并全量生效'}</span>
-            </button>
-            {hasOfficialICloud && (
+            <div className="flex gap-2 flex-wrap items-center">
               <button
                 type="button"
-                onClick={() => {
-                  setIcloudInput('');
-                  fetchApi('/api/v1/shortcuts/sc_cf_bookkeeping/icloud-url', {
-                    method: 'POST',
-                    body: JSON.stringify({ url: '' }),
-                  }).then(() => loadRelease());
-                }}
-                className="px-2.5 py-1.5 text-slate-400 hover:text-red-500 rounded-xl text-xs transition"
-                title="清空并切换回向导模式"
+                disabled={savingICloud || !icloudInput.trim()}
+                onClick={() => handleSaveICloudUrlToDb('global')}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1 transition disabled:opacity-60"
               >
-                清空
+                <span>🌐 保存为全站官方共享（推荐，全员免配置）</span>
               </button>
-            )}
-          </form>
+              <button
+                type="button"
+                disabled={savingICloud || !icloudInput.trim()}
+                onClick={() => handleSaveICloudUrlToDb('personal')}
+                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1 transition disabled:opacity-60"
+              >
+                <span>👤 仅保存为我的专属链接</span>
+              </button>
+              {release?.is_personal && (
+                <button
+                  type="button"
+                  disabled={savingICloud}
+                  onClick={() => {
+                    setIcloudInput('');
+                    handleSaveICloudUrlToDb('personal');
+                  }}
+                  className="px-2.5 py-1.5 text-slate-500 hover:text-red-500 rounded-xl text-xs transition border border-slate-200 bg-white"
+                  title="清除个人专属覆盖，回退到全站官方共享链接"
+                >
+                  恢复使用全站官方共享
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* 触发技巧速览 */}
