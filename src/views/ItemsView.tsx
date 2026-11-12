@@ -439,7 +439,7 @@ export const ItemsView: React.FC<Props> = ({
                     </div>
 
                     {/* 回本进度条 */}
-                    {item.progress_percent !== null && (
+                    {item.progress_percent != null && (
                       <div className="space-y-1">
                         <div className="flex items-center justify-between text-[11px] text-slate-400">
                           <span>

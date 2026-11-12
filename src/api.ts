@@ -8,7 +8,7 @@ export async function fetchApi<T = any>(url: string, options: RequestInit = {}):
     },
   });
 
-  const data = await res.json().catch(() => null);
+  const data = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
 
   if (!res.ok) {
     throw new Error(data?.error || `网络请求错误 (${res.status})`);

@@ -7,6 +7,8 @@ yarn-error.log*
 # Cloudflare & Wrangler
 .wrangler/
 .mf/
+.dev.vars
+.dev.vars.*
 
 # Build outputs
 dist/
