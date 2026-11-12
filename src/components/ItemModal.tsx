@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { X, Check, Trash2, Calendar, DollarSign, Clock, ShieldCheck, MapPin, Snowflake, Sparkles } from 'lucide-react';
 import { fetchApi } from '../api';
-import { Item, ItemWithStats, Account } from '../types';
+import { Item, ItemWithStats, Account, AttachmentPhoto } from '../types';
+import { PhotoPicker } from './PhotoPicker';
 
 interface Props {
   isOpen: boolean;
@@ -58,10 +59,20 @@ export const ItemModal: React.FC<Props> = ({
   const [remark, setRemark] = useState('');
   const [syncLedger, setSyncLedger] = useState(false);
   const [accountId, setAccountId] = useState(accounts[0]?.id || '');
+  const [existingPhotos, setExistingPhotos] = useState<AttachmentPhoto[]>([]);
+  const [newPhotos, setNewPhotos] = useState<string[]>([]);
+  const [photosLoading, setPhotosLoading] = useState(false);
+  const [compressingPhotos, setCompressingPhotos] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    setNewPhotos([]);
+    setCompressingPhotos(false);
+    setExistingPhotos([]);
+
     if (initialItem) {
       setIsWishlistMode(initialItem.status === 'wishlist');
       setName(initialItem.name);
@@ -77,6 +88,22 @@ export const ItemModal: React.FC<Props> = ({
       setCoolingDays(initialItem.cooling_days || 7);
       setRemark(initialItem.remark || '');
       setSyncLedger(false);
+
+      if ((initialItem.photo_count || 0) > 0) {
+        setPhotosLoading(true);
+        fetchApi<{ photos: AttachmentPhoto[] }>(`/api/items/${initialItem.id}/photos`)
+          .then((res) => {
+            if (!cancelled) setExistingPhotos(res.photos || []);
+          })
+          .catch((err) => {
+            if (!cancelled) setError(err?.message || '加载大件照片失败');
+          })
+          .finally(() => {
+            if (!cancelled) setPhotosLoading(false);
+          });
+      } else {
+        setPhotosLoading(false);
+      }
     } else {
       setIsWishlistMode(defaultWishlist);
       setName('');
@@ -93,8 +120,12 @@ export const ItemModal: React.FC<Props> = ({
       setRemark('');
       setSyncLedger(false);
       setAccountId(accounts[0]?.id || '');
+      setPhotosLoading(false);
     }
     setError('');
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen, initialItem, defaultWishlist, accounts]);
 
   if (!isOpen) return null;
@@ -137,7 +168,7 @@ export const ItemModal: React.FC<Props> = ({
     setLoading(true);
     try {
       const finalStatus = isWishlistMode ? 'wishlist' : status;
-      const payload = {
+      const payload: Record<string, any> = {
         name: name.trim(),
         category,
         price: Math.round(price * 100),
@@ -155,11 +186,18 @@ export const ItemModal: React.FC<Props> = ({
       };
 
       if (initialItem) {
+        if (!photosLoading) {
+          payload.keep_photo_ids = existingPhotos.map((p) => p.id);
+          payload.new_photos = newPhotos;
+        }
         await fetchApi(`/api/items/${initialItem.id}`, {
           method: 'PUT',
           body: JSON.stringify(payload),
         });
       } else {
+        if (newPhotos.length > 0) {
+          payload.photos = newPhotos;
+        }
         await fetchApi('/api/items', {
           method: 'POST',
           body: JSON.stringify(payload),
@@ -572,6 +610,19 @@ export const ItemModal: React.FC<Props> = ({
             />
           </div>
 
+          {/* 大件照片 */}
+          <PhotoPicker
+            label="大件照片"
+            existingPhotos={existingPhotos}
+            onRemoveExisting={(id) => setExistingPhotos((prev) => prev.filter((p) => p.id !== id))}
+            newPhotos={newPhotos}
+            onAddNewPhotos={(urls) => setNewPhotos((prev) => [...prev, ...urls])}
+            onRemoveNewPhoto={(idx) => setNewPhotos((prev) => prev.filter((_, i) => i !== idx))}
+            photosLoading={photosLoading}
+            onError={setError}
+            onCompressingChange={setCompressingPhotos}
+          />
+
           {/* 底部按钮 */}
           <div className="flex gap-2 pt-2">
             {initialItem && (
@@ -586,7 +637,7 @@ export const ItemModal: React.FC<Props> = ({
             )}
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || compressingPhotos}
               className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-medium text-xs rounded-xl shadow-md shadow-indigo-200 flex items-center justify-center gap-1.5 transition disabled:opacity-60"
             >
               <Check className="w-4 h-4" />

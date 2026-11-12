@@ -22,10 +22,11 @@ import {
   X
 } from 'lucide-react';
 import { fetchApi, formatCurrency } from '../api';
-import { ItemWithStats, ItemSummary, Account, ItemExpense } from '../types';
+import { ItemWithStats, ItemSummary, Account, ItemExpense, AttachmentPhoto } from '../types';
 import { DynamicIcon } from '../components/DynamicIcon';
 import { AddItemExpenseModal } from '../components/AddItemExpenseModal';
 import { ConvertWishlistModal } from '../components/ConvertWishlistModal';
+import { PhotoLightbox } from '../components/PhotoLightbox';
 
 interface Props {
   onOpenAddItem: (isWishlist?: boolean) => void;
@@ -63,6 +64,27 @@ export const ItemsView: React.FC<Props> = ({
   // 弹窗状态
   const [expenseModalItem, setExpenseModalItem] = useState<ItemWithStats | null>(null);
   const [convertModalItem, setConvertModalItem] = useState<ItemWithStats | null>(null);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxImages, setLightboxImages] = useState<string[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [lightboxLoading, setLightboxLoading] = useState(false);
+
+  const handleOpenPhotos = async (item: ItemWithStats, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLightboxOpen(true);
+    setLightboxIndex(0);
+    setLightboxImages([]);
+    setLightboxLoading(true);
+    try {
+      const res = await fetchApi<{ photos: AttachmentPhoto[] }>(`/api/items/${item.id}/photos`);
+      setLightboxImages((res.photos || []).map((p) => p.data_url));
+    } catch (err: any) {
+      alert(err.message || '加载大件照片失败');
+      setLightboxOpen(false);
+    } finally {
+      setLightboxLoading(false);
+    }
+  };
 
   const loadItems = async () => {
     setLoading(true);
@@ -387,12 +409,32 @@ export const ItemsView: React.FC<Props> = ({
                         </div>
                       </div>
 
-                      {/* 状态大标签 */}
-                      <div className="flex-shrink-0">
-                        {isUsing && (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                            服役 {item.days_used} 天
+                      {/* 照片缩略图与状态大标签 */}
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {(item.photo_count || 0) > 0 && item.first_photo_id && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleOpenPhotos(item, e)}
+                            className="relative w-10 h-10 rounded-xl overflow-hidden border border-slate-200 hover:border-indigo-400 flex-shrink-0 transition shadow-sm"
+                            title="查看大件照片"
+                          >
+                            <img
+                              src={`/api/items/photos/${item.first_photo_id}`}
+                              alt={item.name}
+                              className="w-full h-full object-cover"
+                            />
+                            {(item.photo_count || 0) > 1 && (
+                              <span className="absolute bottom-0 right-0 px-1 bg-black/65 text-white text-[9px] font-semibold rounded-tl-md">
+                                +{item.photo_count}
+                              </span>
+                            )}
+                          </button>
+                        )}
+                        <div>
+                          {isUsing && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                              服役 {item.days_used} 天
                           </span>
                         )}
                         {isIdle && (
@@ -410,6 +452,7 @@ export const ItemsView: React.FC<Props> = ({
                             已出二手 · 服役 {item.days_used} 天
                           </span>
                         )}
+                        </div>
                       </div>
                     </div>
 
@@ -652,11 +695,32 @@ export const ItemsView: React.FC<Props> = ({
                         </div>
                       </div>
 
-                      <div className="text-right">
-                        <div className="text-base font-black text-slate-800">
-                          {formatCurrency(item.price)}
+                      <div className="flex items-center gap-2.5 flex-shrink-0">
+                        {(item.photo_count || 0) > 0 && item.first_photo_id && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleOpenPhotos(item, e)}
+                            className="relative w-10 h-10 rounded-xl overflow-hidden border border-slate-200 hover:border-indigo-400 flex-shrink-0 transition shadow-sm"
+                            title="查看大件照片"
+                          >
+                            <img
+                              src={`/api/items/photos/${item.first_photo_id}`}
+                              alt={item.name}
+                              className="w-full h-full object-cover"
+                            />
+                            {(item.photo_count || 0) > 1 && (
+                              <span className="absolute bottom-0 right-0 px-1 bg-black/65 text-white text-[9px] font-semibold rounded-tl-md">
+                                +{item.photo_count}
+                              </span>
+                            )}
+                          </button>
+                        )}
+                        <div className="text-right">
+                          <div className="text-base font-black text-slate-800">
+                            {formatCurrency(item.price)}
+                          </div>
+                          <div className="text-[10px] text-slate-400">预估售价</div>
                         </div>
-                        <div className="text-[10px] text-slate-400">预估售价</div>
                       </div>
                     </div>
 
@@ -751,6 +815,16 @@ export const ItemsView: React.FC<Props> = ({
         item={convertModalItem}
         accounts={accounts}
       />
+
+      {lightboxOpen && (
+        <PhotoLightbox
+          images={lightboxImages}
+          activeIndex={lightboxIndex}
+          onChangeIndex={setLightboxIndex}
+          onClose={() => setLightboxOpen(false)}
+          loading={lightboxLoading}
+        />
+      )}
     </div>
   );
 };

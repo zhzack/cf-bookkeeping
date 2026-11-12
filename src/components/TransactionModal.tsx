@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { X, ArrowRightLeft, Check, Calendar, MessageSquare, Wallet } from 'lucide-react';
+import { X, Check, Package } from 'lucide-react';
 import { fetchApi } from '../api';
-import { Account, Category, Transaction } from '../types';
+import { Account, Category, Transaction, TransactionPhoto } from '../types';
 import { DynamicIcon } from './DynamicIcon';
+import { PhotoPicker } from './PhotoPicker';
+import { ItemFieldsSection, ItemExtraValues } from './ItemFieldsSection';
 
 interface Props {
   isOpen: boolean;
@@ -11,6 +13,7 @@ interface Props {
   accounts: Account[];
   categories: Category[];
   initialData?: Transaction | null;
+  onConvertToItem?: (tx: Transaction) => void;
 }
 
 export const TransactionModal: React.FC<Props> = ({
@@ -20,6 +23,7 @@ export const TransactionModal: React.FC<Props> = ({
   accounts,
   categories,
   initialData,
+  onConvertToItem,
 }) => {
   const [type, setType] = useState<'expense' | 'income' | 'transfer'>('expense');
   const [amountStr, setAmountStr] = useState('');
@@ -28,11 +32,39 @@ export const TransactionModal: React.FC<Props> = ({
   const [categoryId, setCategoryId] = useState('');
   const [time, setTime] = useState('');
   const [remark, setRemark] = useState('');
+  const [costMode, setCostMode] = useState<'daily' | 'amortize' | 'exclude' | 'item'>('daily');
+  const [amortizeDays, setAmortizeDays] = useState('30');
+  const [amortizeStartDate, setAmortizeStartDate] = useState('');
+  const [itemFields, setItemFields] = useState<ItemExtraValues>({
+    name: '',
+    category: '数码科技',
+    expectedDays: 1095,
+    warrantyDate: '',
+    location: '',
+    remark: '',
+  });
+  const [existingPhotos, setExistingPhotos] = useState<TransactionPhoto[]>([]);
+  const [newPhotos, setNewPhotos] = useState<string[]>([]);
+  const [photosLoading, setPhotosLoading] = useState(false);
+  const [compressingPhotos, setCompressingPhotos] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   // 初始化表单数据
   useEffect(() => {
+    if (!isOpen) return;
+    const localNow = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    setNewPhotos([]);
+    setExistingPhotos([]);
+    setItemFields({
+      name: '',
+      category: '数码科技',
+      expectedDays: 1095,
+      warrantyDate: '',
+      location: '',
+      remark: '',
+    });
+
     if (initialData) {
       setType(initialData.type);
       setAmountStr((initialData.amount / 100).toString());
@@ -41,13 +73,37 @@ export const TransactionModal: React.FC<Props> = ({
       setCategoryId(initialData.category_id || '');
       setTime(initialData.transaction_time.slice(0, 16));
       setRemark(initialData.remark || '');
+      if (initialData.exclude_daily_cost) {
+        setCostMode('exclude');
+        setAmortizeDays('30');
+        setAmortizeStartDate(initialData.transaction_time.slice(0, 10));
+      } else if (initialData.amortize_days && initialData.amortize_days > 1) {
+        setCostMode('amortize');
+        setAmortizeDays(String(initialData.amortize_days));
+        setAmortizeStartDate(initialData.amortize_start_date || initialData.transaction_time.slice(0, 10));
+      } else {
+        setCostMode('daily');
+        setAmortizeDays('30');
+        setAmortizeStartDate(initialData.transaction_time.slice(0, 10));
+      }
+
+      if ((initialData.photo_count || 0) > 0) {
+        setPhotosLoading(true);
+        fetchApi<{ photos: TransactionPhoto[] }>(`/api/transactions/${initialData.id}/photos`)
+          .then((res) => setExistingPhotos(res.photos || []))
+          .catch((err) => console.error(err))
+          .finally(() => setPhotosLoading(false));
+      }
     } else {
       setType('expense');
       setAmountStr('');
       setAccountId(accounts[0]?.id || '');
       setDestinationAccountId(accounts[1]?.id || '');
-      setTime(new Date().toISOString().slice(0, 16));
+      setTime(localNow);
       setRemark('');
+      setCostMode('daily');
+      setAmortizeDays('30');
+      setAmortizeStartDate(localNow.slice(0, 10));
       // 预选第一个匹配分类
       const firstExp = categories.find((c) => c.type === 'expense');
       setCategoryId(firstExp?.id || '');
@@ -96,9 +152,29 @@ export const TransactionModal: React.FC<Props> = ({
       return;
     }
 
+    const parsedAmortizeDays = Math.round(Number(amortizeDays));
+    if (type === 'expense' && costMode === 'amortize') {
+      if (isNaN(parsedAmortizeDays) || parsedAmortizeDays < 2 || parsedAmortizeDays > 36500) {
+        setError('分摊天数需为 2 ~ 36500 之间的整数');
+        return;
+      }
+    }
+
+    const isNewAsItem = !initialData && type === 'expense' && costMode === 'item';
+    if (isNewAsItem && !(itemFields.name || remark).trim()) {
+      setError('标记为大件时请填写物品名称');
+      return;
+    }
+
+    const totalPhotoCount = existingPhotos.length + newPhotos.length;
+    if (totalPhotoCount > 3) {
+      setError('每笔流水最多上传 3 张照片');
+      return;
+    }
+
     setLoading(true);
     try {
-      const payload = {
+      const basePayload = {
         type,
         amount: cents,
         account_id: accountId,
@@ -106,17 +182,44 @@ export const TransactionModal: React.FC<Props> = ({
         category_id: type !== 'transfer' ? categoryId : null,
         transaction_time: time.replace('T', ' ') + ':00',
         remark: remark.trim(),
+        amortize_days: type === 'expense' && costMode === 'amortize' ? parsedAmortizeDays : null,
+        amortize_start_date: type === 'expense' && costMode === 'amortize' ? (amortizeStartDate || time.slice(0, 10)) : null,
+        exclude_daily_cost: type === 'expense' && (costMode === 'exclude' || costMode === 'item') ? 1 : 0,
       };
 
       if (initialData) {
         await fetchApi(`/api/transactions/${initialData.id}`, {
           method: 'PUT',
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            ...basePayload,
+            ...(photosLoading
+              ? {}
+              : {
+                  keep_photo_ids: existingPhotos.map((p) => p.id),
+                  new_photos: newPhotos,
+                }),
+          }),
         });
       } else {
         await fetchApi('/api/transactions', {
           method: 'POST',
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            ...basePayload,
+            photos: newPhotos,
+            ...(isNewAsItem
+              ? {
+                  convert_to_item: true,
+                  item_details: {
+                    name: (itemFields.name || remark).trim(),
+                    category: itemFields.category,
+                    expected_days: itemFields.expectedDays ? Number(itemFields.expectedDays) : null,
+                    warranty_date: itemFields.warrantyDate || null,
+                    location: itemFields.location.trim() || null,
+                    remark: itemFields.remark.trim() || remark.trim() || null,
+                  },
+                }
+              : {}),
+          }),
         });
       }
 
@@ -315,7 +418,7 @@ export const TransactionModal: React.FC<Props> = ({
               <label className="block text-xs font-semibold text-slate-500 mb-1">备注说明</label>
               <input
                 type="text"
-                placeholder="例如: 和同事聚餐、超市买水果"
+                placeholder="例如: 和同事聚餐、房租/宽带年费"
                 value={remark}
                 onChange={(e) => setRemark(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
@@ -323,14 +426,154 @@ export const TransactionModal: React.FC<Props> = ({
             </div>
           </div>
 
+          {/* 每日生活成本分摊与大件标记 (仅支出) */}
+          {type === 'expense' && (
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-600">每日生活成本口径 / 大件归类</span>
+                {costMode === 'amortize' && parseFloat(amountStr) > 0 && Number(amortizeDays) > 1 && (
+                  <span className="text-[11px] font-semibold text-amber-600">
+                    约 ¥{(parseFloat(amountStr) / Number(amortizeDays)).toFixed(2)} / 天
+                  </span>
+                )}
+              </div>
+
+              {initialData?.item_id ? (
+                <div className="p-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-xs text-indigo-700 flex items-center gap-2">
+                  <Package className="w-4 h-4 flex-shrink-0" />
+                  <span>
+                    已关联持物大件「{initialData.item_name || '查看大件'}」，已自动排除出日常日均避免重复统计。
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { label: '当日消费', mode: 'daily' as const },
+                      { label: '按月(30天)', mode: 'amortize' as const, days: '30' },
+                      { label: '按季(90天)', mode: 'amortize' as const, days: '90' },
+                      { label: '按年(365天)', mode: 'amortize' as const, days: '365' },
+                      { label: '自定义天数', mode: 'amortize' as const },
+                      { label: '不计入日均', mode: 'exclude' as const },
+                      ...(!initialData ? [{ label: '📦 标记为大件', mode: 'item' as const }] : []),
+                    ].map((opt) => {
+                      const isActive =
+                        opt.mode === 'daily'
+                          ? costMode === 'daily'
+                          : opt.mode === 'exclude'
+                          ? costMode === 'exclude'
+                          : opt.mode === 'item'
+                          ? costMode === 'item'
+                          : opt.days
+                          ? costMode === 'amortize' && amortizeDays === opt.days
+                          : costMode === 'amortize' && !['30', '90', '365'].includes(amortizeDays);
+                      return (
+                        <button
+                          key={opt.label}
+                          type="button"
+                          onClick={() => {
+                            setCostMode(opt.mode);
+                            if (opt.mode === 'item' && !itemFields.name && remark.trim()) {
+                              setItemFields((prev) => ({ ...prev, name: remark.trim() }));
+                            }
+                            if (opt.days) setAmortizeDays(opt.days);
+                            else if (opt.mode === 'amortize' && ['30', '90', '365'].includes(amortizeDays)) {
+                              setAmortizeDays('180');
+                            }
+                            if (!amortizeStartDate) {
+                              setAmortizeStartDate(time.slice(0, 10));
+                            }
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition ${
+                            isActive
+                              ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                              : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {initialData && onConvertToItem && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onConvertToItem(initialData);
+                      }}
+                      className="w-full py-2 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition"
+                    >
+                      <Package className="w-3.5 h-3.5" />
+                      <span>将这笔开销设为持物大件并补充信息</span>
+                    </button>
+                  )}
+                </>
+              )}
+
+              {costMode === 'amortize' && (
+                <div className="grid grid-cols-2 gap-2.5 pt-1">
+                  <div>
+                    <label className="block text-[11px] text-slate-500 mb-1">分摊天数</label>
+                    <input
+                      type="number"
+                      min="2"
+                      max="36500"
+                      value={amortizeDays}
+                      onChange={(e) => setAmortizeDays(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-500 mb-1">分摊起始日</label>
+                    <input
+                      type="date"
+                      value={amortizeStartDate || time.slice(0, 10)}
+                      onChange={(e) => setAmortizeStartDate(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {costMode === 'exclude' && !initialData?.item_id && (
+                <p className="text-[11px] text-slate-400">
+                  仍正常扣减账户余额与月度支出，但不会计入「每日生活成本」（适用于大件购置或非消费类垫付）。
+                </p>
+              )}
+
+              {costMode === 'item' && !initialData && (
+                <div className="pt-2 border-t border-slate-200/80 space-y-2.5">
+                  <div className="text-[11px] text-indigo-600 font-medium">
+                    将同时生成一笔支出流水与「持物大件」记录，且大件照片会同步保存下方上传的图片。
+                  </div>
+                  <ItemFieldsSection values={itemFields} onChange={setItemFields} />
+                </div>
+              )}
+            </div>
+          )}
+
+          <PhotoPicker
+            label={costMode === 'item' && !initialData ? '账单 / 大件照片' : '账单照片'}
+            existingPhotos={existingPhotos}
+            onRemoveExisting={(id) => setExistingPhotos((prev) => prev.filter((p) => p.id !== id))}
+            newPhotos={newPhotos}
+            onAddNewPhotos={(urls) => setNewPhotos((prev) => [...prev, ...urls])}
+            onRemoveNewPhoto={(idx) => setNewPhotos((prev) => prev.filter((_, i) => i !== idx))}
+            photosLoading={photosLoading}
+            onError={setError}
+            onCompressingChange={setCompressingPhotos}
+          />
+
           <div className="pt-2">
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || compressingPhotos}
               className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-medium rounded-xl shadow-md shadow-indigo-200 flex items-center justify-center gap-2 transition disabled:opacity-60"
             >
               <Check className="w-5 h-5" />
-              <span>{loading ? '正在保存...' : initialData ? '保存修改' : '确认记账'}</span>
+              <span>{loading ? '正在保存...' : initialData ? '保存修改' : costMode === 'item' ? '确认记账并录入大件' : '确认记账'}</span>
             </button>
           </div>
         </form>

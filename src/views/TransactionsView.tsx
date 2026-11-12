@@ -1,16 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Filter, Plus, ArrowRightLeft, Calendar } from 'lucide-react';
-import { fetchApi, formatCurrency, formatDateTime } from '../api';
-import { Account, Category, Transaction } from '../types';
+import { ChevronLeft, ChevronRight, Plus, Calendar, Package } from 'lucide-react';
+import { fetchApi, formatCurrency } from '../api';
+import { OverviewData, Transaction, TransactionPhoto } from '../types';
 import { DynamicIcon } from '../components/DynamicIcon';
+import { DailyCostCard } from '../components/DailyCostCard';
+import { PhotoLightbox } from '../components/PhotoLightbox';
+import { getLocalTodayStr } from '../utils/image';
 
 interface Props {
   onOpenAddModal: () => void;
   onEditTransaction: (tx: Transaction) => void;
+  onConvertToItem?: (tx: Transaction) => void;
   refreshTrigger: number;
 }
 
-export const TransactionsView: React.FC<Props> = ({ onOpenAddModal, onEditTransaction, refreshTrigger }) => {
+export const TransactionsView: React.FC<Props> = ({
+  onOpenAddModal,
+  onEditTransaction,
+  onConvertToItem,
+  refreshTrigger,
+}) => {
   const [currentMonth, setCurrentMonth] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -18,6 +27,11 @@ export const TransactionsView: React.FC<Props> = ({ onOpenAddModal, onEditTransa
   const [filterType, setFilterType] = useState<string>(''); // '' | 'expense' | 'income' | 'transfer'
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [summary, setSummary] = useState({ total_expense: 0, total_income: 0, balance: 0, total_count: 0 });
+  const [dailyCost, setDailyCost] = useState<OverviewData['daily_cost'] | null>(null);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxImages, setLightboxImages] = useState<string[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [lightboxLoading, setLightboxLoading] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const loadData = async () => {
@@ -25,13 +39,35 @@ export const TransactionsView: React.FC<Props> = ({ onOpenAddModal, onEditTransa
     try {
       let url = `/api/transactions?month=${currentMonth}`;
       if (filterType) url += `&type=${filterType}`;
-      const data = await fetchApi<{ transactions: Transaction[]; summary: any }>(url);
+      const localToday = getLocalTodayStr();
+      const [data, overview] = await Promise.all([
+        fetchApi<{ transactions: Transaction[]; summary: any }>(url),
+        fetchApi<OverviewData>(`/api/stats/overview?month=${currentMonth}&today=${localToday}`),
+      ]);
       setTransactions(data.transactions);
       setSummary(data.summary);
+      setDailyCost(overview.daily_cost);
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleOpenPhotos = async (tx: Transaction, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLightboxOpen(true);
+    setLightboxIndex(0);
+    setLightboxImages([]);
+    setLightboxLoading(true);
+    try {
+      const res = await fetchApi<{ photos: TransactionPhoto[] }>(`/api/transactions/${tx.id}/photos`);
+      setLightboxImages((res.photos || []).map((p) => p.data_url));
+    } catch (err: any) {
+      alert(err.message || '加载照片失败');
+      setLightboxOpen(false);
+    } finally {
+      setLightboxLoading(false);
     }
   };
 
@@ -132,6 +168,9 @@ export const TransactionsView: React.FC<Props> = ({ onOpenAddModal, onEditTransa
         </div>
       </div>
 
+      {/* 每日生活成本统计看板（首页展示） */}
+      {dailyCost && <DailyCostCard dailyCost={dailyCost} />}
+
       {/* 流水明细列表 */}
       {loading ? (
         <div className="text-center py-12 text-slate-400 text-xs">加载中...</div>
@@ -191,12 +230,27 @@ export const TransactionsView: React.FC<Props> = ({ onOpenAddModal, onEditTransa
                           </div>
 
                           <div>
-                            <div className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+                            <div className="text-sm font-semibold text-slate-800 flex items-center gap-1.5 flex-wrap">
                               <span>
                                 {isTransfer
                                   ? `${tx.account_name} ➔ ${tx.destination_account_name}`
                                   : tx.category_name || '未分类'}
                               </span>
+                              {isExpense && tx.amortize_days && tx.amortize_days > 1 && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-amber-50 text-amber-600 border border-amber-200/70">
+                                  分摊{tx.amortize_days}天
+                                </span>
+                              )}
+                              {isExpense && tx.item_id && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-indigo-50 text-indigo-600 border border-indigo-200/70">
+                                  📦 {tx.item_name ? `大件·${tx.item_name}` : '已关联大件'}
+                                </span>
+                              )}
+                              {isExpense && Boolean(tx.exclude_daily_cost) && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-slate-100 text-slate-500">
+                                  不计入日均
+                                </span>
+                              )}
                             </div>
                             <div className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
                               {!isTransfer && <span>{tx.account_name}</span>}
@@ -206,7 +260,42 @@ export const TransactionsView: React.FC<Props> = ({ onOpenAddModal, onEditTransa
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2.5">
+                          {isExpense && !tx.item_id && onConvertToItem && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onConvertToItem(tx);
+                              }}
+                              className="px-2 py-1 text-[11px] font-medium rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-600 flex items-center gap-1 transition sm:opacity-0 sm:group-hover:opacity-100"
+                              title="转为持物大件并补充信息"
+                            >
+                              <Package className="w-3 h-3" />
+                              <span className="hidden sm:inline">设为大件</span>
+                            </button>
+                          )}
+
+                          {(tx.photo_count || 0) > 0 && tx.first_photo_id && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleOpenPhotos(tx, e)}
+                              className="relative w-9 h-9 rounded-xl overflow-hidden border border-slate-200 hover:border-indigo-400 flex-shrink-0 transition"
+                              title="查看账单照片"
+                            >
+                              <img
+                                src={`/api/transactions/photos/${tx.first_photo_id}`}
+                                alt="账单缩略图"
+                                className="w-full h-full object-cover"
+                              />
+                              {(tx.photo_count || 0) > 1 && (
+                                <span className="absolute bottom-0 right-0 px-1 bg-black/65 text-white text-[9px] font-semibold rounded-tl-md">
+                                  +{tx.photo_count}
+                                </span>
+                              )}
+                            </button>
+                          )}
+
                           <span
                             className={`text-sm sm:text-base font-bold ${
                               isExpense
@@ -236,6 +325,16 @@ export const TransactionsView: React.FC<Props> = ({ onOpenAddModal, onEditTransa
             );
           })}
         </div>
+      )}
+
+      {lightboxOpen && (
+        <PhotoLightbox
+          images={lightboxImages}
+          activeIndex={lightboxIndex}
+          onChangeIndex={setLightboxIndex}
+          onClose={() => setLightboxOpen(false)}
+          loading={lightboxLoading}
+        />
       )}
     </div>
   );
