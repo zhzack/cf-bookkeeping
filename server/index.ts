@@ -8,6 +8,7 @@ import { transactionsRouter } from './routes/transactions';
 import { statsRouter } from './routes/stats';
 import { itemsRouter } from './routes/items';
 import { rulesRouter } from './routes/rules';
+import { shortcutsRouter } from './routes/shortcuts';
 
 const app = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
 
@@ -33,6 +34,8 @@ api.route('/transactions', transactionsRouter);
 api.route('/stats', statsRouter);
 api.route('/items', itemsRouter);
 api.route('/rules', rulesRouter);
+api.route('/shortcuts', shortcutsRouter);
+api.route('/v1/shortcuts', shortcutsRouter);
 
 // 挂载所有 /api 路由
 app.route('/api', api);

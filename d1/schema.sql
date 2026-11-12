@@ -175,4 +175,21 @@ CREATE TABLE IF NOT EXISTS auto_rules (
 
 CREATE INDEX IF NOT EXISTS idx_auto_rules_user ON auto_rules(user_id, enabled, priority DESC);
 
+-- 快捷指令版本管理与分发表
+CREATE TABLE IF NOT EXISTS shortcuts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    version TEXT NOT NULL DEFAULT '1.0.0',
+    file_path TEXT DEFAULT NULL,
+    file_hash TEXT DEFAULT NULL,
+    signing_status TEXT DEFAULT 'unsigned', -- 'unsigned' | 'signed' | 'official_signed'
+    generation_status TEXT DEFAULT 'ready',  -- 'pending' | 'ready' | 'failed'
+    sharing_type TEXT DEFAULT 'icloud',      -- 'icloud' | 'direct_download' | 'guide'
+    icloud_share_url TEXT DEFAULT NULL,
+    download_count INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 

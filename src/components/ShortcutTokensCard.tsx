@@ -20,6 +20,7 @@ import {
   ChevronUp,
   PlusCircle,
   HelpCircle,
+  Link2,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import { fetchApi } from '../api';
@@ -42,6 +43,18 @@ interface ShortcutPairInfo {
   pair_json: string;
   pair_url: string;
   icloud_url: string;
+}
+
+interface ShortcutRelease {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  signing_status: string;
+  generation_status: string;
+  sharing_type: string;
+  icloud_share_url: string | null;
+  download_count: number;
 }
 
 const SHORTCUT_TEMPLATES = [
@@ -96,9 +109,14 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
-  const [customICloudUrl, setCustomICloudUrl] = useState(() => {
-    return (typeof window !== 'undefined' && localStorage.getItem('cf_saved_icloud_shortcut_url')) || '';
-  });
+
+  // 官方版本发布与真实 iCloud 链接管理 (模式 B)
+  const [release, setRelease] = useState<ShortcutRelease | null>(null);
+  const [icloudInput, setIcloudInput] = useState('');
+  const [savingICloud, setSavingICloud] = useState(false);
+
+  const isAppleMobile =
+    typeof navigator !== 'undefined' && /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
   const quickEndpoint =
     typeof window !== 'undefined' ? `${window.location.origin}/api/transactions/quick` : '/api/transactions/quick';
@@ -107,6 +125,18 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
     try {
       const res = await fetchApi<{ tokens: ApiTokenInfo[] }>('/api/auth/tokens');
       setTokens(res.tokens || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const loadRelease = async () => {
+    try {
+      const res = await fetchApi<ShortcutRelease>('/api/v1/shortcuts/current');
+      setRelease(res);
+      if (res?.icloud_share_url) {
+        setIcloudInput(res.icloud_share_url);
+      }
     } catch (err) {
       console.error(err);
     }
@@ -147,6 +177,7 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
 
   useEffect(() => {
     loadTokens();
+    loadRelease();
     initShortcutPair();
   }, []);
 
@@ -161,15 +192,31 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
   };
 
   const handleOpenShortcutsApp = () => {
-    // 自动将接口 URL 复制到剪贴板，随后调起快捷指令新建
     copyText('autoUrl', quickEndpoint);
     window.location.href = 'shortcuts://create-shortcut';
   };
 
-  const handleSaveICloudUrl = (url: string) => {
-    setCustomICloudUrl(url);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('cf_saved_icloud_shortcut_url', url.trim());
+  const handleSaveICloudUrlToDb = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingICloud(true);
+    try {
+      const res = await fetchApi<{ success: boolean; icloud_share_url: string | null }>(
+        '/api/v1/shortcuts/sc_cf_bookkeeping/icloud-url',
+        {
+          method: 'POST',
+          body: JSON.stringify({ url: icloudInput.trim() }),
+        }
+      );
+      await loadRelease();
+      alert(
+        res.icloud_share_url
+          ? '🎉 官方 iCloud 分享链接已成功绑定并同步！所有移动端用户点击「添加到 iPhone」将直接通过苹果官方流程安装。'
+          : '已重置 iCloud 分享链接为向导模式'
+      );
+    } catch (err: any) {
+      alert(err?.message || '保存失败');
+    } finally {
+      setSavingICloud(false);
     }
   };
 
@@ -234,6 +281,7 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
   const currentTpl = SHORTCUT_TEMPLATES.find((t) => t.key === activeTpl) || SHORTCUT_TEMPLATES[0];
   const activeToken = pairInfo?.token || newPlainToken;
   const authHeaderValue = `Bearer ${activeToken}`;
+  const hasOfficialICloud = Boolean(release?.icloud_share_url);
 
   return (
     <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
@@ -243,14 +291,21 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
           <span>账单导入 & iOS 快捷指令记账</span>
         </h3>
 
-        <button
-          type="button"
-          onClick={() => onOpenGuide('import-and-shortcuts')}
-          className="text-[11px] font-semibold text-indigo-600 hover:underline flex items-center gap-1"
-        >
-          <BookOpen className="w-3.5 h-3.5" />
-          <span>配置图文教程</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {release && (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold border border-slate-200">
+              v{release.version} · {hasOfficialICloud ? 'iCloud 官方分发' : '引导/直下模式'}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => onOpenGuide('import-and-shortcuts')}
+            className="text-[11px] font-semibold text-indigo-600 hover:underline flex items-center gap-1"
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>配置图文教程</span>
+          </button>
+        </div>
       </div>
 
       {/* 微信/支付宝定期导入 */}
@@ -273,23 +328,23 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
         </div>
       )}
 
-      {/* 🚀 极简免配置：iPhone / iPad 快捷记账指南 */}
+      {/* 🚀 快捷指令自适应分发卡片 (设备感知：iPhone / iPad vs Desktop) */}
       <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-indigo-50 via-purple-50/50 to-pink-50/30 border border-indigo-100/90 shadow-sm space-y-4">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="space-y-1">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="p-1.5 rounded-xl bg-indigo-600 text-white shadow-sm">
                 <Zap className="w-4 h-4" />
               </span>
               <h4 className="text-sm font-bold text-slate-900">
-                iPhone / iPad 随手记账（已自动准备好令牌）
+                随手记账 · iOS 快捷指令（免手动生成令牌）
               </h4>
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
-                免手动创建令牌
+                专属安全令牌已就绪
               </span>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              因苹果系统安全签名限制，快捷指令无法由外部静默推送。只需添加 2 个积木动作，30 秒即可在手机上搭好！
+              支持 Siri 语音记账、轻点手机背面两下记账与付款截屏 OCR 自动提取，1 秒同步入账。
             </p>
           </div>
 
@@ -301,16 +356,16 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
                 className="px-3 py-1.5 rounded-xl bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-xs font-semibold flex items-center gap-1 shadow-sm transition"
               >
                 <QrCode className="w-3.5 h-3.5" />
-                <span>{showQrCode ? '隐藏二维码' : '手机扫码向导'}</span>
+                <span>{showQrCode ? '隐藏二维码' : '手机扫码配对'}</span>
               </button>
             )}
 
             {pairInfo && (
               <a
-                href={`/api/transactions/shortcut-file?token=${encodeURIComponent(pairInfo.token)}`}
+                href={`/api/v1/shortcuts/sc_cf_bookkeeping/download?token=${encodeURIComponent(pairInfo.token)}`}
                 download="随手记账.shortcut"
                 className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-semibold flex items-center gap-1 shadow-sm transition"
-                title="在 Mac 上双击可直接导入已配置好的快捷指令"
+                title="模式 A：直接下载已预填配置的 .shortcut 文件 (适用于 Mac 双击导入或第三方工具)"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>下载 .shortcut (Mac)</span>
@@ -332,113 +387,154 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
                 <Smartphone className="w-4 h-4 text-indigo-600" />
                 <span>拿起 iPhone 相机对准左侧二维码</span>
               </div>
-              <p>1. 手机相机将直接识别并弹出「随手记账闪电配置」向导页面。</p>
-              <p>2. 在手机上一键唤起快捷指令新建，两步拼接即可完成配置。</p>
+              <p>1. 手机相机将直接识别并弹出「随手记账」安装配对页面。</p>
+              <p>2. 根据页面指引，点击即可直接添加到手机快捷指令库。</p>
               <p className="text-[11px] text-indigo-600 font-medium pt-1">
-                支持 Siri 语音记账、轻点手机背面两下记账与付款截屏 OCR 自动识别！
+                支持 Siri 语音唤起、轻点手机背面两下与截屏识别！
               </p>
             </div>
           </div>
         )}
 
-        {/* 步骤 1：直接打开手机快捷指令 App 新建 */}
-        <div className="p-3.5 sm:p-4 rounded-2xl bg-white border border-indigo-100/80 shadow-xs space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-indigo-950 flex items-center gap-2">
-              <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[11px] flex items-center justify-center font-bold">
-                1
+        {/* 模式选择展示：如果有真实 iCloud 分享链接 (模式 B) */}
+        {hasOfficialICloud ? (
+          <div className="p-4 rounded-2xl bg-white border border-emerald-100/90 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>模式 B：已启用官方 iCloud 分享链接分发</span>
               </span>
-              <span>在手机上调起快捷指令新建</span>
-            </span>
-            <span className="text-[10px] text-indigo-600 font-semibold px-2 py-0.5 rounded-full bg-indigo-50">
-              一步唤起
-            </span>
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-2">
-            <button
-              type="button"
-              onClick={handleOpenShortcutsApp}
-              className="flex-1 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white text-xs font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 transition"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>📱 点击在 iPhone 上打开新建快捷指令</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => copyText('fullUrl', quickEndpoint)}
-              className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold rounded-xl text-xs flex items-center justify-center gap-1 transition"
-            >
-              {copiedKey === 'fullUrl' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copiedKey === 'fullUrl' ? '已复制接口' : '复制接口 URL'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 步骤 2：添加 2 个核心动作拆解 */}
-        <div className="p-3.5 sm:p-4 rounded-2xl bg-white border border-purple-100/80 shadow-xs space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-purple-950 flex items-center gap-2">
-              <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[11px] flex items-center justify-center font-bold">
-                2
+              <span className="text-[10px] text-emerald-700 font-medium bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                Apple 官方流程
               </span>
-              <span>在快捷指令编辑页添加 2 个动作（照着填即可）</span>
-            </span>
-          </div>
-
-          {/* 动作 1 */}
-          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1 text-xs">
-            <div className="font-bold text-slate-800 flex items-center justify-between">
-              <span>动作 A：搜索并添加「请求输入」</span>
-              <span className="text-[10px] text-slate-400 font-mono">1/2</span>
             </div>
-            <p className="text-slate-600 text-[11px]">
-              输入类型选「文本」，提示信息填：<code>输入消费（如：咖啡 18.5、午饭 25、打车 30）</code>
+            <p className="text-xs text-slate-600 leading-normal">
+              已绑定由 Apple 设备官方生成的分享链接，在 iPhone 上点击下方按钮将直接呼起苹果系统原生安装流程：
             </p>
-          </div>
-
-          {/* 动作 2 */}
-          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70 space-y-2 text-xs">
-            <div className="font-bold text-slate-800 flex items-center justify-between">
-              <span>动作 B：搜索并添加「获取 URL 的内容」</span>
-              <span className="text-[10px] text-slate-400 font-mono">2/2</span>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <a
+                href={release?.icloud_share_url!}
+                target="_blank"
+                rel="noreferrer"
+                className="flex-1 py-3 px-4 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white text-xs font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 transition"
+              >
+                <Smartphone className="w-4 h-4 text-amber-300" />
+                <span>① 点击直接添加到 iPhone</span>
+              </a>
+              {pairInfo && (
+                <a
+                  href={pairInfo.pair_url}
+                  className="px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-sm flex items-center justify-center gap-1.5 transition"
+                >
+                  <Zap className="w-4 h-4" />
+                  <span>② 一键绑定此账号</span>
+                </a>
+              )}
             </div>
+          </div>
+        ) : (
+          /* 引导模式：尚未绑定官方 iCloud 分享链接时的两步极简向导 */
+          <div className="space-y-3">
+            {/* 步骤 1 */}
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-white border border-indigo-100/80 shadow-xs space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-indigo-950 flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[11px] flex items-center justify-center font-bold">
+                    1
+                  </span>
+                  <span>在手机上调起快捷指令新建</span>
+                </span>
+                <span className="text-[10px] text-indigo-600 font-semibold px-2 py-0.5 rounded-full bg-indigo-50">
+                  一键唤起
+                </span>
+              </div>
 
-            <div className="space-y-1">
-              <div className="text-[11px] text-slate-500 font-medium">① URL（点击一键复制后粘贴）：</div>
-              <div className="flex items-center gap-1.5">
-                <code className="flex-1 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-[11px] font-mono text-slate-800 truncate">
-                  {quickEndpoint}
-                </code>
+              <div className="flex flex-col sm:flex-row gap-2">
                 <button
                   type="button"
-                  onClick={() => copyText('cardUrl', quickEndpoint)}
-                  className="px-2.5 py-1.5 bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 rounded-lg text-xs font-semibold flex items-center gap-1 transition flex-shrink-0"
+                  onClick={handleOpenShortcutsApp}
+                  className="flex-1 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white text-xs font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 transition"
                 >
-                  {copiedKey === 'cardUrl' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedKey === 'cardUrl' ? '已复制' : '复制'}</span>
+                  <PlusCircle className="w-4 h-4" />
+                  <span>📱 点击在 iPhone 上打开新建快捷指令</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => copyText('fullUrl', quickEndpoint)}
+                  className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold rounded-xl text-xs flex items-center justify-center gap-1 transition"
+                >
+                  {copiedKey === 'fullUrl' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedKey === 'fullUrl' ? '已复制接口' : '复制接口 URL'}</span>
                 </button>
               </div>
             </div>
 
-            <div className="p-2.5 bg-white rounded-lg border border-slate-200/80 space-y-1.5 text-[11px] text-slate-700">
-              <div className="font-semibold text-slate-800">② 点击动作右下角展开箭头设置：</div>
-              <div>• <strong>方法：</strong>选择 <code>POST</code></div>
-              <div className="flex items-center justify-between gap-1 flex-wrap">
-                <span>• <strong>标头：</strong>添加 <code>Authorization</code></span>
-                <button
-                  type="button"
-                  onClick={() => copyText('authHeaderVal', authHeaderValue)}
-                  className="text-indigo-600 font-bold hover:underline flex items-center gap-1"
-                >
-                  {copiedKey === 'authHeaderVal' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                  <span>{copiedKey === 'authHeaderVal' ? '已复制 Header 值' : '复制 Header 值 (含令牌)'}</span>
-                </button>
+            {/* 步骤 2 */}
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-white border border-purple-100/80 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-purple-950 flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[11px] flex items-center justify-center font-bold">
+                    2
+                  </span>
+                  <span>在快捷指令编辑页添加 2 个核心动作（按提示填入）</span>
+                </span>
               </div>
-              <div>• <strong>请求正文：</strong>选择 <code>JSON</code>，添加键 <code>text</code>，值选择上面的「提供的输入」！</div>
+
+              {/* 动作 1 */}
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1 text-xs">
+                <div className="font-bold text-slate-800 flex items-center justify-between">
+                  <span>动作 A：搜索并添加「请求输入」</span>
+                  <span className="text-[10px] text-slate-400 font-mono">1/2</span>
+                </div>
+                <p className="text-slate-600 text-[11px]">
+                  输入类型选「文本」，提示信息填：<code>输入消费（如：咖啡 18.5、午饭 25、打车 30）</code>
+                </p>
+              </div>
+
+              {/* 动作 2 */}
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70 space-y-2 text-xs">
+                <div className="font-bold text-slate-800 flex items-center justify-between">
+                  <span>动作 B：搜索并添加「获取 URL 的内容」</span>
+                  <span className="text-[10px] text-slate-400 font-mono">2/2</span>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-[11px] text-slate-500 font-medium">① URL（点击一键复制后粘贴）：</div>
+                  <div className="flex items-center gap-1.5">
+                    <code className="flex-1 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-[11px] font-mono text-slate-800 truncate">
+                      {quickEndpoint}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => copyText('cardUrl', quickEndpoint)}
+                      className="px-2.5 py-1.5 bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 rounded-lg text-xs font-semibold flex items-center gap-1 transition flex-shrink-0"
+                    >
+                      {copiedKey === 'cardUrl' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedKey === 'cardUrl' ? '已复制' : '复制'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-2.5 bg-white rounded-lg border border-slate-200/80 space-y-1.5 text-[11px] text-slate-700">
+                  <div className="font-semibold text-slate-800">② 点击动作右下角展开箭头设置：</div>
+                  <div>• <strong>方法：</strong>选择 <code>POST</code></div>
+                  <div className="flex items-center justify-between gap-1 flex-wrap">
+                    <span>• <strong>标头：</strong>添加 <code>Authorization</code></span>
+                    <button
+                      type="button"
+                      onClick={() => copyText('authHeaderVal', authHeaderValue)}
+                      className="text-indigo-600 font-bold hover:underline flex items-center gap-1"
+                    >
+                      {copiedKey === 'authHeaderVal' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedKey === 'authHeaderVal' ? '已复制 Header 值' : '复制 Header 值 (含令牌)'}</span>
+                    </button>
+                  </div>
+                  <div>• <strong>请求正文：</strong>选择 <code>JSON</code>，添加键 <code>text</code>，值选择上面的「提供的输入」！</div>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* 连通性测试 & 触发方式卡片 */}
         <div className="p-3 rounded-2xl bg-white/80 border border-slate-200/60 flex items-center justify-between gap-3 flex-wrap text-xs">
@@ -478,34 +574,55 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
           </div>
         )}
 
-        {/* 自定义保存个人 iCloud 分享链接 */}
-        <div className="p-3 rounded-2xl bg-white/60 border border-slate-200/50 space-y-1.5 text-xs">
-          <div className="font-bold text-slate-700 flex items-center gap-1">
-            <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
-            <span>保存您的专属 iCloud 分享链接（可选）</span>
-          </div>
-          <p className="text-[11px] text-slate-500">
-            如果您在手机上配置好后点击了右上角的「分享」→「拷贝 iCloud 链接」，可以保存在这里，换手机或分享给家人时可直接一键添加：
-          </p>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={customICloudUrl}
-              onChange={(e) => handleSaveICloudUrl(e.target.value)}
-              placeholder="https://www.icloud.com/shortcuts/..."
-              className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-[11px] font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            {customICloudUrl && (
-              <a
-                href={customICloudUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-[11px] font-bold flex items-center gap-1 hover:bg-indigo-700 transition"
-              >
-                <span>打开</span>
-              </a>
+        {/* 绑定/同步官方 Apple iCloud 分享链接 (模式 B 配置后台) */}
+        <div className="p-3.5 rounded-2xl bg-white/70 border border-slate-200/70 space-y-2 text-xs">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="font-bold text-slate-800 flex items-center gap-1.5">
+              <Link2 className="w-4 h-4 text-indigo-600" />
+              <span>绑定官方认证的 Apple iCloud 分享链接 (模式 B)</span>
+            </div>
+            {hasOfficialICloud && (
+              <span className="text-[10px] text-emerald-700 font-semibold px-2 py-0.5 bg-emerald-50 rounded-full border border-emerald-200">
+                已生效全员可用
+              </span>
             )}
           </div>
+          <p className="text-[11px] text-slate-500 leading-normal">
+            按苹果规范，禁止由第三方服务器伪造虚拟链接。在 iPhone / Mac 上制作好「随手记账」后，点击右上角「分享」→「拷贝 iCloud 链接」填入下方并保存。系统将同步更新至数据库，后续任何用户点击「添加到 iPhone」都将 100% 成功唤起苹果官方安装流程！
+          </p>
+
+          <form onSubmit={handleSaveICloudUrlToDb} className="flex gap-2">
+            <input
+              type="text"
+              value={icloudInput}
+              onChange={(e) => setIcloudInput(e.target.value)}
+              placeholder="https://www.icloud.com/shortcuts/xxxxxxxxxxxxxxxxxxxxxxxx"
+              className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-[11px] font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            <button
+              type="submit"
+              disabled={savingICloud}
+              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1 transition disabled:opacity-60 flex-shrink-0"
+            >
+              <span>{savingICloud ? '同步中...' : '保存并全量生效'}</span>
+            </button>
+            {hasOfficialICloud && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIcloudInput('');
+                  fetchApi('/api/v1/shortcuts/sc_cf_bookkeeping/icloud-url', {
+                    method: 'POST',
+                    body: JSON.stringify({ url: '' }),
+                  }).then(() => loadRelease());
+                }}
+                className="px-2.5 py-1.5 text-slate-400 hover:text-red-500 rounded-xl text-xs transition"
+                title="清空并切换回向导模式"
+              >
+                清空
+              </button>
+            )}
+          </form>
         </div>
 
         {/* 触发技巧速览 */}
@@ -640,7 +757,7 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
                   onClick={() => copyText('url', quickEndpoint)}
                   className="px-2 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-medium text-indigo-600 hover:border-indigo-300 flex items-center gap-1"
                 >
-                  {copiedKey === 'url' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                  {copiedKey === 'url' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copiedKey === 'url' ? 'URL 已复制' : '复制接口 URL'}</span>
                 </button>
               </div>
@@ -684,7 +801,7 @@ export const ShortcutTokensCard: React.FC<Props> = ({ onOpenImport, onOpenGuide 
                     onClick={() => copyText('json', currentTpl.json)}
                     className="absolute top-2 right-2 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] flex items-center gap-1"
                   >
-                    {copiedKey === 'json' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    {copiedKey === 'json' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>{copiedKey === 'json' ? '已复制' : '复制 JSON'}</span>
                   </button>
                 </div>
