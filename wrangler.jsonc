@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cf-bookkeeping",
+  "main": "server/index.ts",
+  "compatibility_date": "2024-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cf_bookkeeping_db",
+      "database_id": "cf_bookkeeping_db_local"
+    }
+  ],
+  "vars": {
+    "JWT_SECRET": "cf_bookkeeping_jwt_secret_dev_key_2026"
+  }
+}
+
