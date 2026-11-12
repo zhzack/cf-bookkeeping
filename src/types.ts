@@ -39,10 +39,13 @@ export interface Transaction {
   category_id?: string | null;
   transaction_time: string;
   remark?: string | null;
+  scene?: string | null;
   amortize_days?: number | null;
   amortize_start_date?: string | null;
   exclude_daily_cost?: number;
   item_id?: string | null;
+  source?: string | null;
+  external_id?: string | null;
   created_at: string;
   // Joined properties
   account_name?: string;
@@ -53,6 +56,14 @@ export interface Transaction {
   item_name?: string | null;
   photo_count?: number;
   first_photo_id?: string | null;
+}
+
+export interface ApiTokenInfo {
+  id: string;
+  name: string;
+  token_prefix: string;
+  last_used_at: string | null;
+  created_at: string;
 }
 
 export interface AttachmentPhoto {
@@ -68,6 +79,11 @@ export interface AttachmentPhoto {
 export type TransactionPhoto = AttachmentPhoto;
 
 export interface OverviewData {
+  period?: 'week' | 'month' | 'year';
+  anchor?: string;
+  period_label?: string;
+  period_start?: string;
+  period_end?: string;
   month: string;
   assets: {
     total_assets: number;
@@ -87,6 +103,19 @@ export interface OverviewData {
     total_amount: number;
     count: number;
     percentage: number;
+  }>;
+  scene_breakdown?: Array<{
+    scene: string;
+    total_amount: number;
+    count: number;
+    percentage: number;
+  }>;
+  trend_unit?: 'day' | 'month';
+  trend?: Array<{
+    key: string;
+    label: string;
+    expense: number;
+    income: number;
   }>;
   daily_trend: Array<{
     day: string;
@@ -180,6 +209,27 @@ export interface ItemSummary {
   sold_count: number;
   total_count: number;
 }
+
+export interface AutoRule {
+  id: string;
+  user_id: string;
+  name: string;
+  tx_type: 'all' | 'expense' | 'income';
+  keywords: string;
+  match_mode: 'contains' | 'exact';
+  account_id?: string | null;
+  category_id?: string | null;
+  scene?: string | null;
+  priority: number;
+  enabled: number;
+  created_at: string;
+  account_name?: string | null;
+  category_name?: string | null;
+  category_icon?: string | null;
+  category_color?: string | null;
+  category_type?: 'expense' | 'income' | null;
+}
+
 
 
 

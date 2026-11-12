@@ -28,13 +28,27 @@ categoriesRouter.get('/', async (c) => {
 // 新增分类
 categoriesRouter.post('/', async (c) => {
   const user = c.get('user');
-  const { name, type, icon, color } = await c.req.json();
+  const body = await c.req.json();
+  const rawName = typeof body?.name === 'string' ? body.name.trim() : '';
+  const type = body?.type;
+  const icon = typeof body?.icon === 'string' && body.icon.trim() ? body.icon.trim() : 'Tag';
+  const color = typeof body?.color === 'string' && body.color.trim() ? body.color.trim() : '#6B7280';
 
-  if (!name || !name.trim()) {
+  if (!rawName) {
     return c.json({ error: '分类名称不能为空' }, 400);
   }
+  const cleanName = rawName.slice(0, 20);
   if (type !== 'expense' && type !== 'income') {
     return c.json({ error: '分类类型必须是支出 (expense) 或收入 (income)' }, 400);
+  }
+
+  const dup = await c.env.DB.prepare(
+    'SELECT id FROM categories WHERE user_id = ? AND type = ? AND LOWER(TRIM(name)) = LOWER(?)'
+  )
+    .bind(user.id, type, cleanName)
+    .first<{ id: string }>();
+  if (dup) {
+    return c.json({ error: `已存在同名${type === 'expense' ? '支出' : '收入'}分类「${cleanName}」` }, 400);
   }
 
   const id = 'cat_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
@@ -47,32 +61,62 @@ categoriesRouter.post('/', async (c) => {
   await c.env.DB.prepare(
     `INSERT INTO categories (id, user_id, name, type, icon, color, sort_order)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, user.id, name.trim(), type, icon || 'Tag', color || '#6B7280', sortOrder).run();
+  ).bind(id, user.id, cleanName, type, icon, color, sortOrder).run();
 
-  return c.json({ id, message: '分类创建成功' });
+  const created = await c.env.DB.prepare('SELECT * FROM categories WHERE id = ? AND user_id = ?')
+    .bind(id, user.id)
+    .first<Category>();
+
+  return c.json({ id, category: created, message: '分类创建成功' });
 });
 
 // 更新分类
 categoriesRouter.put('/:id', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
-  const { name, icon, color } = await c.req.json();
+  const body = await c.req.json();
+  const rawName = typeof body?.name === 'string' ? body.name.trim() : '';
 
-  if (!name || !name.trim()) {
+  if (!rawName) {
     return c.json({ error: '分类名称不能为空' }, 400);
   }
+  const cleanName = rawName.slice(0, 20);
 
-  const res = await c.env.DB.prepare(
-    `UPDATE categories 
-     SET name = ?, icon = ?, color = ?
-     WHERE id = ? AND user_id = ?`
-  ).bind(name.trim(), icon, color, id, user.id).run();
+  const existing = await c.env.DB.prepare(
+    'SELECT * FROM categories WHERE id = ? AND user_id = ?'
+  )
+    .bind(id, user.id)
+    .first<Category>();
 
-  if (res.meta.changes === 0) {
+  if (!existing) {
     return c.json({ error: '未找到该分类或无权修改' }, 404);
   }
 
-  return c.json({ message: '分类更新成功' });
+  const dup = await c.env.DB.prepare(
+    'SELECT id FROM categories WHERE user_id = ? AND type = ? AND LOWER(TRIM(name)) = LOWER(?) AND id != ?'
+  )
+    .bind(user.id, existing.type, cleanName, id)
+    .first<{ id: string }>();
+  if (dup) {
+    return c.json({ error: `已存在同名${existing.type === 'expense' ? '支出' : '收入'}分类「${cleanName}」` }, 400);
+  }
+
+  const nextIcon =
+    typeof body?.icon === 'string' && body.icon.trim() ? body.icon.trim() : existing.icon || 'Tag';
+  const nextColor =
+    typeof body?.color === 'string' && body.color.trim() ? body.color.trim() : existing.color || '#6B7280';
+
+  await c.env.DB.prepare(
+    `UPDATE categories
+     SET name = ?, icon = ?, color = ?
+     WHERE id = ? AND user_id = ?`
+  ).bind(cleanName, nextIcon, nextColor, id, user.id).run();
+
+  const updated = await c.env.DB.prepare('SELECT * FROM categories WHERE id = ? AND user_id = ?')
+    .bind(id, user.id)
+    .first<Category>();
+
+  return c.json({ category: updated, message: '分类更新成功' });
 });
 
 // 删除分类

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { setCookie, deleteCookie } from 'hono/cookie';
 import { Env, UserSession } from '../types';
-import { hashPassword, verifyPassword, createSessionToken, requireAuth } from '../auth';
+import { hashPassword, hashToken, verifyPassword, createSessionToken, requireAuth } from '../auth';
 
 export const authRouter = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
 
@@ -172,4 +172,82 @@ authRouter.post('/password', requireAuth, async (c) => {
   ).bind(hash, salt, user.id).run();
 
   return c.json({ message: '密码修改成功' });
+});
+
+// 获取当前用户的长期 API Token 列表（用于快捷指令）
+authRouter.get('/tokens', requireAuth, async (c) => {
+  const user = c.get('user');
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, name, token_prefix, last_used_at, created_at FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC'
+  )
+    .bind(user.id)
+    .all();
+
+  return c.json({ tokens: results });
+});
+
+// 创建新的长期 API Token（仅在创建时返回一次完整明文 Token）
+authRouter.post('/tokens', requireAuth, async (c) => {
+  const user = c.get('user');
+  let body: any = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    body = {};
+  }
+
+  const countRow = await c.env.DB.prepare(
+    'SELECT COUNT(*) as count FROM api_tokens WHERE user_id = ?'
+  )
+    .bind(user.id)
+    .first<{ count: number }>();
+
+  if ((countRow?.count || 0) >= 10) {
+    return c.json({ error: '最多创建 10 个快捷指令令牌，请先删除不用的旧令牌' }, 400);
+  }
+
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  const rawHex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  const plainToken = `cbk_live_${rawHex}`;
+  const tokenHash = await hashToken(plainToken);
+  const tokenPrefix = `${plainToken.slice(0, 15)}...${plainToken.slice(-4)}`;
+  const id = 'tok_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 40) : 'iOS 快捷指令';
+
+  await c.env.DB.prepare(
+    'INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix) VALUES (?, ?, ?, ?, ?)'
+  )
+    .bind(id, user.id, name, tokenHash, tokenPrefix)
+    .run();
+
+  return c.json({
+    id,
+    name,
+    token: plainToken,
+    token_prefix: tokenPrefix,
+    created_at: new Date().toISOString(),
+  });
+});
+
+// 撤销/删除 API Token
+authRouter.delete('/tokens/:id', requireAuth, async (c) => {
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare(
+    'SELECT id FROM api_tokens WHERE id = ? AND user_id = ?'
+  )
+    .bind(id, user.id)
+    .first();
+
+  if (!existing) {
+    return c.json({ error: '令牌不存在' }, 404);
+  }
+
+  await c.env.DB.prepare('DELETE FROM api_tokens WHERE id = ? AND user_id = ?')
+    .bind(id, user.id)
+    .run();
+
+  return c.json({ success: true });
 });

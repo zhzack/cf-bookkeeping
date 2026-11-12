@@ -54,10 +54,13 @@ export interface Transaction {
   category_id?: string | null;
   transaction_time: string;
   remark?: string | null;
+  scene?: string | null;
   amortize_days?: number | null;
   amortize_start_date?: string | null;
   exclude_daily_cost?: number;
   item_id?: string | null;
+  source?: string | null;
+  external_id?: string | null;
   created_at: string;
   // Joined fields
   account_name?: string;

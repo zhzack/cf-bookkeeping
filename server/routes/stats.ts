@@ -39,31 +39,105 @@ function getPrevMonth(monthStr: string): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-function getMonthEvalRange(monthStr: string, todayStr: string) {
-  const [y, m] = monthStr.split('-').map(Number);
-  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  const monthStart = `${monthStr}-01`;
-  const monthLastDay = `${monthStr}-${String(daysInMonth).padStart(2, '0')}`;
-  const currentMonthStr = todayStr.slice(0, 7);
+export type StatsPeriod = 'week' | 'month' | 'year';
 
-  if (monthStr === currentMonthStr) {
+interface PeriodEvalRange {
+  period: StatsPeriod;
+  anchor: string;
+  prevAnchor: string;
+  periodLabel: string;
+  periodStart: string;
+  periodLastDay: string;
+  evalEnd: string;
+  elapsedDays: number;
+  totalDays: number;
+  isCurrent: boolean;
+  isFuture: boolean;
+}
+
+const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+function getPeriodEvalRange(period: StatsPeriod, rawAnchor: string | undefined, todayStr: string): PeriodEvalRange {
+  if (period === 'week') {
+    const baseDate =
+      rawAnchor && /^\d{4}-\d{2}-\d{2}$/.test(rawAnchor)
+        ? rawAnchor
+        : rawAnchor && /^\d{4}-\d{2}$/.test(rawAnchor)
+        ? `${rawAnchor}-01`
+        : todayStr;
+    const dow = new Date(parseDateUTC(baseDate)).getUTCDay();
+    const offsetFromMon = dow === 0 ? 6 : dow - 1;
+    const periodStart = addDaysStr(baseDate, -offsetFromMon);
+    const periodLastDay = addDaysStr(periodStart, 6);
+    const isCurrent = todayStr >= periodStart && todayStr <= periodLastDay;
+    const isFuture = periodStart > todayStr;
+    const elapsedDays = isCurrent ? Math.max(1, diffDaysInclusive(periodStart, todayStr)) : 7;
+
     return {
-      monthStart,
-      monthEnd: todayStr,
-      elapsedDays: Math.max(1, Number(todayStr.slice(8, 10))),
-      daysInMonth,
-      isCurrentMonth: true,
-      isFutureMonth: false,
+      period: 'week',
+      anchor: periodStart,
+      prevAnchor: addDaysStr(periodStart, -7),
+      periodLabel: `${periodStart.slice(5).replace('-', '/')} ~ ${periodLastDay.slice(5).replace('-', '/')} 周`,
+      periodStart,
+      periodLastDay,
+      evalEnd: isCurrent ? todayStr : periodLastDay,
+      elapsedDays,
+      totalDays: 7,
+      isCurrent,
+      isFuture,
     };
   }
 
+  if (period === 'year') {
+    const yearStr =
+      rawAnchor && /^\d{4}/.test(rawAnchor) ? rawAnchor.slice(0, 4) : todayStr.slice(0, 4);
+    const periodStart = `${yearStr}-01-01`;
+    const periodLastDay = `${yearStr}-12-31`;
+    const currentYear = todayStr.slice(0, 4);
+    const isCurrent = yearStr === currentYear;
+    const isFuture = yearStr > currentYear;
+    const totalDays = diffDaysInclusive(periodStart, periodLastDay);
+    const elapsedDays = isCurrent ? Math.max(1, diffDaysInclusive(periodStart, todayStr)) : totalDays;
+
+    return {
+      period: 'year',
+      anchor: yearStr,
+      prevAnchor: String(Number(yearStr) - 1),
+      periodLabel: `${yearStr} 年`,
+      periodStart,
+      periodLastDay,
+      evalEnd: isCurrent ? todayStr : periodLastDay,
+      elapsedDays,
+      totalDays,
+      isCurrent,
+      isFuture,
+    };
+  }
+
+  // 默认按月统计
+  const monthStr =
+    rawAnchor && /^\d{4}-\d{2}/.test(rawAnchor) ? rawAnchor.slice(0, 7) : todayStr.slice(0, 7);
+  const [y, m] = monthStr.split('-').map(Number);
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const periodStart = `${monthStr}-01`;
+  const periodLastDay = `${monthStr}-${String(daysInMonth).padStart(2, '0')}`;
+  const currentMonthStr = todayStr.slice(0, 7);
+  const isCurrent = monthStr === currentMonthStr;
+  const isFuture = monthStr > currentMonthStr;
+  const elapsedDays = isCurrent ? Math.max(1, Number(todayStr.slice(8, 10))) : daysInMonth;
+
   return {
-    monthStart,
-    monthEnd: monthLastDay,
-    elapsedDays: daysInMonth,
-    daysInMonth,
-    isCurrentMonth: false,
-    isFutureMonth: monthStr > currentMonthStr,
+    period: 'month',
+    anchor: monthStr,
+    prevAnchor: getPrevMonth(monthStr),
+    periodLabel: `${y} 年 ${String(m).padStart(2, '0')} 月`,
+    periodStart,
+    periodLastDay,
+    evalEnd: isCurrent ? todayStr : periodLastDay,
+    elapsedDays,
+    totalDays: daysInMonth,
+    isCurrent,
+    isFuture,
   };
 }
 
@@ -85,16 +159,15 @@ interface PlainExpenseRow {
   exclude_daily_cost: number;
 }
 
-function computeDailyCostForMonth(params: {
-  monthStr: string;
+function computeDailyCostForRange(params: {
+  range: PeriodEvalRange;
   todayStr: string;
   amortizedTxs: AmortizedTxRow[];
   plainExpenses: PlainExpenseRow[];
   items: Item[];
   expensesByItem: Record<string, ItemExpense[]>;
 }) {
-  const { monthStr, todayStr, amortizedTxs, plainExpenses, items, expensesByItem } = params;
-  const range = getMonthEvalRange(monthStr, todayStr);
+  const { range, todayStr, amortizedTxs, plainExpenses, items, expensesByItem } = params;
 
   // 1. 固定开销摊销
   let amortizedMonthTotalFloat = 0;
@@ -117,8 +190,8 @@ function computeDailyCostForMonth(params: {
   for (const tx of amortizedTxs) {
     const startDate = tx.amortize_start_date || tx.transaction_time.slice(0, 10);
     const endDate = addDaysStr(startDate, tx.amortize_days - 1);
-    const overlapStart = startDate > range.monthStart ? startDate : range.monthStart;
-    const overlapEnd = endDate < range.monthEnd ? endDate : range.monthEnd;
+    const overlapStart = startDate > range.periodStart ? startDate : range.periodStart;
+    const overlapEnd = endDate < range.evalEnd ? endDate : range.evalEnd;
 
     if (overlapStart <= overlapEnd) {
       const overlapDays = diffDaysInclusive(overlapStart, overlapEnd);
@@ -156,9 +229,9 @@ function computeDailyCostForMonth(params: {
   // 2. 日常流水消费（排除已分摊流水与大件同步流水）
   let variableExpenseTotal = 0;
   let excludedExpenseTotal = 0;
-  if (!range.isFutureMonth) {
+  if (!range.isFuture) {
     for (const exp of plainExpenses) {
-      if (exp.day >= range.monthStart && exp.day <= range.monthEnd) {
+      if (exp.day >= range.periodStart && exp.day <= range.evalEnd) {
         if (exp.exclude_daily_cost) {
           excludedExpenseTotal += exp.amount;
         } else {
@@ -168,7 +241,7 @@ function computeDailyCostForMonth(params: {
     }
   }
 
-  const variableDailyCost = !range.isFutureMonth && range.elapsedDays > 0
+  const variableDailyCost = !range.isFuture && range.elapsedDays > 0
     ? Math.round(variableExpenseTotal / range.elapsedDays)
     : 0;
 
@@ -176,26 +249,26 @@ function computeDailyCostForMonth(params: {
   let itemDailyCostFloat = 0;
   let activeItemCount = 0;
 
-  if (!range.isFutureMonth) {
+  if (!range.isFuture) {
     for (const item of items) {
       if (item.status === 'wishlist' || item.status === 'idle') continue;
-      if (item.purchase_date > range.monthEnd) continue;
+      if (item.purchase_date > range.evalEnd) continue;
 
-      const isActiveInMonth = range.isCurrentMonth
+      const isActiveInPeriod = range.isCurrent
         ? item.status === 'using'
         : item.status === 'using' ||
           ((item.status === 'retired' || item.status === 'sold') &&
-            Boolean(item.retired_date && item.retired_date > range.monthEnd));
+            Boolean(item.retired_date && item.retired_date > range.evalEnd));
 
-      if (!isActiveInMonth) continue;
+      if (!isActiveInPeriod) continue;
 
       activeItemCount++;
       const itemExps = expensesByItem[item.id] || [];
       const additionalCost = itemExps
-        .filter((e) => e.date <= range.monthEnd)
+        .filter((e) => e.date <= range.evalEnd)
         .reduce((sum, e) => sum + e.amount, 0);
 
-      const daysUsed = Math.max(1, diffDays(item.purchase_date, range.monthEnd));
+      const daysUsed = Math.max(1, diffDays(item.purchase_date, range.evalEnd));
       const netCost = Math.max(0, item.price + additionalCost - (item.resale_price || 0));
       const costPerDay = Math.round((netCost / daysUsed) * 100) / 100;
       itemDailyCostFloat += costPerDay;
@@ -223,9 +296,15 @@ statsRouter.get('/overview', async (c) => {
   const user = c.get('user');
   const todayParam = c.req.query('today');
   const todayStr = todayParam && /^\d{4}-\d{2}-\d{2}$/.test(todayParam) ? todayParam : getTodayUTC8();
-  const monthParam = c.req.query('month');
-  const currentMonth = monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : todayStr.slice(0, 7);
-  const prevMonth = getPrevMonth(currentMonth);
+  const periodParam = c.req.query('period');
+  const period: StatsPeriod =
+    periodParam === 'week' || periodParam === 'year' || periodParam === 'month' ? periodParam : 'month';
+  const anchorParam = c.req.query('date') || c.req.query('month');
+
+  const currRange = getPeriodEvalRange(period, anchorParam, todayStr);
+  const prevRange = getPeriodEvalRange(period, currRange.prevAnchor, todayStr);
+  const startTime = `${currRange.periodStart} 00:00:00`;
+  const endTime = `${currRange.periodLastDay} 23:59:59`;
 
   // 1. 各账户当前余额计算
   const accountsSql = `
@@ -257,70 +336,136 @@ statsRouter.get('/overview', async (c) => {
 
   const netWorth = totalAssets - totalLiabilities;
 
-  // 2. 本月总收支
-  const monthSumSql = `
+  // 2. 所选周期（周/月/年）总收支
+  const periodSumSql = `
     SELECT 
-      COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS month_expense,
-      COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS month_income
+      COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS period_expense,
+      COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS period_income
     FROM transactions
-    WHERE user_id = ? AND transaction_time LIKE ?
+    WHERE user_id = ? AND transaction_time >= ? AND transaction_time <= ?
   `;
-  const monthSummary = await c.env.DB.prepare(monthSumSql).bind(user.id, `${currentMonth}%`).first<{
-    month_expense: number;
-    month_income: number;
+  const periodSummary = await c.env.DB.prepare(periodSumSql).bind(user.id, startTime, endTime).first<{
+    period_expense: number;
+    period_income: number;
   }>();
 
-  const monthExpense = monthSummary?.month_expense || 0;
-  const monthIncome = monthSummary?.month_income || 0;
-  const monthSurplus = monthIncome - monthExpense;
+  const periodExpense = periodSummary?.period_expense || 0;
+  const periodIncome = periodSummary?.period_income || 0;
+  const periodSurplus = periodIncome - periodExpense;
 
-  // 3. 本月支出分类占比
+  // 3. 所选周期支出分类占比（兼容未关联分类记录）
   const categoryBreakdownSql = `
     SELECT 
-      c.id,
-      c.name,
-      c.icon,
-      c.color,
+      COALESCE(c.id, '__uncategorized__') AS id,
+      COALESCE(c.name, '未分类') AS name,
+      COALESCE(c.icon, 'HelpCircle') AS icon,
+      COALESCE(c.color, '#94a3b8') AS color,
       SUM(t.amount) as total_amount,
       COUNT(t.id) as count
     FROM transactions t
-    JOIN categories c ON t.category_id = c.id
-    WHERE t.user_id = ? AND t.type = 'expense' AND t.transaction_time LIKE ?
-    GROUP BY c.id
+    LEFT JOIN categories c ON t.category_id = c.id
+    WHERE t.user_id = ? AND t.type = 'expense' AND t.transaction_time >= ? AND t.transaction_time <= ?
+    GROUP BY COALESCE(c.id, '__uncategorized__')
     ORDER BY total_amount DESC
   `;
-  const { results: rawCategoryBreakdown } = await c.env.DB.prepare(categoryBreakdownSql).bind(user.id, `${currentMonth}%`).all<{
-    id: string;
-    name: string;
-    icon: string;
-    color: string;
-    total_amount: number;
-    count: number;
-  }>();
+  const { results: rawCategoryBreakdown } = await c.env.DB.prepare(categoryBreakdownSql)
+    .bind(user.id, startTime, endTime)
+    .all<{
+      id: string;
+      name: string;
+      icon: string;
+      color: string;
+      total_amount: number;
+      count: number;
+    }>();
 
   const categoryBreakdown = rawCategoryBreakdown.map((item) => ({
     ...item,
-    percentage: monthExpense > 0 ? Math.round((item.total_amount / monthExpense) * 1000) / 10 : 0,
+    percentage: periodExpense > 0 ? Math.round((item.total_amount / periodExpense) * 1000) / 10 : 0,
   }));
 
-  // 4. 每日支出趋势 (当月按天统计)
-  const dailyTrendSql = `
-    SELECT 
-      SUBSTR(transaction_time, 1, 10) as day,
-      COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as expense,
-      COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as income
+  // 3b. 所选周期消费场景分布
+  const sceneBreakdownSql = `
+    SELECT
+      TRIM(scene) AS scene,
+      SUM(amount) AS total_amount,
+      COUNT(id) AS count
     FROM transactions
-    WHERE user_id = ? AND transaction_time LIKE ?
-    GROUP BY SUBSTR(transaction_time, 1, 10)
-    ORDER BY day ASC
+    WHERE user_id = ? AND type = 'expense'
+      AND transaction_time >= ? AND transaction_time <= ?
+      AND scene IS NOT NULL AND TRIM(scene) != ''
+    GROUP BY TRIM(scene)
+    ORDER BY total_amount DESC
   `;
-  const { results: dailyTrend } = await c.env.DB.prepare(dailyTrendSql).bind(user.id, `${currentMonth}%`).all<{
-    day: string;
-    expense: number;
-    income: number;
-  }>();
+  const { results: rawSceneBreakdown } = await c.env.DB.prepare(sceneBreakdownSql)
+    .bind(user.id, startTime, endTime)
+    .all<{ scene: string; total_amount: number; count: number }>();
 
-  // 5. 每日生活成本（固定开销摊销 + 日常流水 + 大件摊薄 + 环比上月）
+  const sceneBreakdown = rawSceneBreakdown.map((item) => ({
+    ...item,
+    percentage: periodExpense > 0 ? Math.round((item.total_amount / periodExpense) * 1000) / 10 : 0,
+  }));
+
+  // 4. 支出趋势（周/月按天补齐 0 值；年按 1~12 月补齐 0 值）
+  const trendUnit: 'day' | 'month' = period === 'year' ? 'month' : 'day';
+  const trendSql =
+    trendUnit === 'month'
+      ? `
+        SELECT
+          SUBSTR(transaction_time, 1, 7) AS bucket,
+          COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense,
+          COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income
+        FROM transactions
+        WHERE user_id = ? AND transaction_time >= ? AND transaction_time <= ?
+        GROUP BY SUBSTR(transaction_time, 1, 7)
+        ORDER BY bucket ASC
+      `
+      : `
+        SELECT
+          SUBSTR(transaction_time, 1, 10) AS bucket,
+          COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense,
+          COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income
+        FROM transactions
+        WHERE user_id = ? AND transaction_time >= ? AND transaction_time <= ?
+        GROUP BY SUBSTR(transaction_time, 1, 10)
+        ORDER BY bucket ASC
+      `;
+
+  const { results: rawTrend } = await c.env.DB.prepare(trendSql)
+    .bind(user.id, startTime, endTime)
+    .all<{ bucket: string; expense: number; income: number }>();
+
+  const bucketMap = new Map(rawTrend.map((r) => [r.bucket, r]));
+  const trend: Array<{ key: string; label: string; expense: number; income: number }> = [];
+  const dailyTrend: Array<{ day: string; expense: number; income: number }> = [];
+
+  if (trendUnit === 'month') {
+    const yearStr = currRange.anchor;
+    for (let m = 1; m <= 12; m++) {
+      const key = `${yearStr}-${String(m).padStart(2, '0')}`;
+      const hit = bucketMap.get(key);
+      trend.push({
+        key,
+        label: `${m}月`,
+        expense: hit?.expense || 0,
+        income: hit?.income || 0,
+      });
+    }
+  } else {
+    let cursor = currRange.periodStart;
+    while (cursor <= currRange.periodLastDay) {
+      const hit = bucketMap.get(cursor);
+      const expense = hit?.expense || 0;
+      const income = hit?.income || 0;
+      const dow = new Date(parseDateUTC(cursor)).getUTCDay();
+      const label = period === 'week' ? `${WEEKDAY_NAMES[dow]}` : cursor.slice(8, 10);
+      trend.push({ key: cursor, label, expense, income });
+      dailyTrend.push({ day: cursor, expense, income });
+      cursor = addDaysStr(cursor, 1);
+    }
+  }
+
+  // 5. 每日生活成本（固定开销摊销 + 日常流水 + 大件摊薄 + 环比上一周期）
   const amortizedSql = `
     SELECT
       t.id,
@@ -350,12 +495,16 @@ statsRouter.get('/overview', async (c) => {
     WHERE user_id = ?
       AND type = 'expense'
       AND (amortize_days IS NULL OR amortize_days <= 1)
-      AND (transaction_time LIKE ? OR transaction_time LIKE ?)
+      AND transaction_time >= ?
+      AND transaction_time <= ?
   `;
+
+  const plainQueryStart = `${prevRange.periodStart} 00:00:00`;
+  const plainQueryEnd = `${currRange.periodLastDay} 23:59:59`;
 
   const [amortizedRes, plainExpRes, itemsRes, itemExpRes] = await Promise.all([
     c.env.DB.prepare(amortizedSql).bind(user.id).all<AmortizedTxRow>(),
-    c.env.DB.prepare(plainExpenseSql).bind(user.id, `${currentMonth}%`, `${prevMonth}%`).all<PlainExpenseRow>(),
+    c.env.DB.prepare(plainExpenseSql).bind(user.id, plainQueryStart, plainQueryEnd).all<PlainExpenseRow>(),
     c.env.DB.prepare('SELECT * FROM items WHERE user_id = ?').bind(user.id).all<Item>(),
     c.env.DB.prepare('SELECT * FROM item_expenses WHERE user_id = ?').bind(user.id).all<ItemExpense>(),
   ]);
@@ -366,8 +515,8 @@ statsRouter.get('/overview', async (c) => {
     expensesByItem[exp.item_id].push(exp);
   }
 
-  const currCost = computeDailyCostForMonth({
-    monthStr: currentMonth,
+  const currCost = computeDailyCostForRange({
+    range: currRange,
     todayStr,
     amortizedTxs: amortizedRes.results,
     plainExpenses: plainExpRes.results,
@@ -375,8 +524,8 @@ statsRouter.get('/overview', async (c) => {
     expensesByItem,
   });
 
-  const prevCost = computeDailyCostForMonth({
-    monthStr: prevMonth,
+  const prevCost = computeDailyCostForRange({
+    range: prevRange,
     todayStr,
     amortizedTxs: amortizedRes.results,
     plainExpenses: plainExpRes.results,
@@ -390,18 +539,26 @@ statsRouter.get('/overview', async (c) => {
     : null;
 
   return c.json({
-    month: currentMonth,
+    period,
+    anchor: currRange.anchor,
+    period_label: currRange.periodLabel,
+    period_start: currRange.periodStart,
+    period_end: currRange.periodLastDay,
+    month: currRange.periodStart.slice(0, 7),
     assets: {
       total_assets: totalAssets,
       total_liabilities: totalLiabilities,
       net_worth: netWorth,
     },
     month_summary: {
-      expense: monthExpense,
-      income: monthIncome,
-      surplus: monthSurplus,
+      expense: periodExpense,
+      income: periodIncome,
+      surplus: periodSurplus,
     },
     category_breakdown: categoryBreakdown,
+    scene_breakdown: sceneBreakdown,
+    trend_unit: trendUnit,
+    trend,
     daily_trend: dailyTrend,
     daily_cost: {
       total_daily_cost: currCost.totalDailyCost,
@@ -409,9 +566,9 @@ statsRouter.get('/overview', async (c) => {
       variable_daily_cost: currCost.variableDailyCost,
       item_daily_cost: currCost.itemDailyCost,
       elapsed_days: currCost.range.elapsedDays,
-      days_in_month: currCost.range.daysInMonth,
-      month_start: currCost.range.monthStart,
-      month_end: currCost.range.monthEnd,
+      days_in_month: currCost.range.totalDays,
+      month_start: currCost.range.periodStart,
+      month_end: currCost.range.evalEnd,
       variable_expense_total: currCost.variableExpenseTotal,
       amortized_month_total: currCost.amortizedMonthTotal,
       excluded_expense_total: currCost.excludedExpenseTotal,

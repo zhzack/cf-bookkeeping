@@ -7,6 +7,7 @@ import { categoriesRouter } from './routes/categories';
 import { transactionsRouter } from './routes/transactions';
 import { statsRouter } from './routes/stats';
 import { itemsRouter } from './routes/items';
+import { rulesRouter } from './routes/rules';
 
 const app = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
 
@@ -14,7 +15,7 @@ const app = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
 app.use('*', cors({
   origin: (origin) => origin,
   credentials: true,
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
 }));
 
@@ -31,6 +32,7 @@ api.route('/categories', categoriesRouter);
 api.route('/transactions', transactionsRouter);
 api.route('/stats', statsRouter);
 api.route('/items', itemsRouter);
+api.route('/rules', rulesRouter);
 
 // 挂载所有 /api 路由
 app.route('/api', api);

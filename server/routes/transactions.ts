@@ -1,6 +1,14 @@
 import { Hono } from 'hono';
-import { Env, UserSession, Transaction } from '../types';
+import { Env, UserSession, Transaction, Account, Category } from '../types';
 import { requireAuth } from '../auth';
+import { AutoRuleLike, matchAutoRules } from '../../src/utils/ruleMatcher';
+import {
+  getNowUTC8Str,
+  matchAccount,
+  matchCategory,
+  normalizeTimeString,
+  parseQuickText,
+} from '../quickParse';
 import {
   MAX_PHOTOS_PER_RECORD,
   ValidatedPhoto,
@@ -60,6 +68,31 @@ async function createItemRecord(
   return itemId;
 }
 
+const PRESET_SCENES = [
+  '日常三餐',
+  '通勤出行',
+  '外卖夜宵',
+  '居家日用',
+  '社交聚会',
+  '约会请客',
+  '旅行出差',
+  '情绪消费',
+  '自我提升',
+  '人情往来',
+  '医疗健康',
+  '固定订阅',
+];
+
+function normalizeScene(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed.slice(0, 24) : null;
+}
+
+function escapeLikePattern(str: string): string {
+  return str.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 function normalizeDailyCostFields(
   type: string,
   amortizeDaysRaw: unknown,
@@ -104,38 +137,481 @@ function normalizeDailyCostFields(
   };
 }
 
+interface TxFilterInput {
+  month?: string;
+  startDate?: string;
+  endDate?: string;
+  accountId?: string;
+  categoryId?: string;
+  type?: string;
+  scene?: string;
+  search?: string;
+  exactRemark?: string;
+}
+
+const TX_LIST_JOINS = `
+  FROM transactions t
+  LEFT JOIN accounts a ON t.account_id = a.id
+  LEFT JOIN accounts da ON t.destination_account_id = da.id
+  LEFT JOIN categories c ON t.category_id = c.id
+  LEFT JOIN items i ON t.item_id = i.id
+`;
+
+function buildTransactionFilterClause(userId: string, filter: TxFilterInput) {
+  let whereClause = 'WHERE t.user_id = ?';
+  const params: any[] = [userId];
+
+  if (filter.startDate && /^\d{4}-\d{2}-\d{2}$/.test(filter.startDate)) {
+    whereClause += ' AND t.transaction_time >= ?';
+    params.push(`${filter.startDate} 00:00:00`);
+  }
+  if (filter.endDate && /^\d{4}-\d{2}-\d{2}$/.test(filter.endDate)) {
+    whereClause += ' AND t.transaction_time <= ?';
+    params.push(`${filter.endDate} 23:59:59`);
+  }
+  if (!filter.startDate && !filter.endDate && filter.month && filter.month !== 'all') {
+    whereClause += ' AND t.transaction_time LIKE ?';
+    params.push(`${filter.month}%`);
+  }
+
+  if (filter.accountId) {
+    whereClause += ' AND (t.account_id = ? OR t.destination_account_id = ?)';
+    params.push(filter.accountId, filter.accountId);
+  }
+
+  if (filter.categoryId) {
+    if (filter.categoryId === '__uncategorized__') {
+      whereClause += " AND (t.category_id IS NULL OR t.category_id = '')";
+    } else {
+      whereClause += ' AND t.category_id = ?';
+      params.push(filter.categoryId);
+    }
+  }
+
+  if (filter.type) {
+    whereClause += ' AND t.type = ?';
+    params.push(filter.type);
+  }
+
+  if (filter.scene) {
+    if (filter.scene === '__none__') {
+      whereClause += " AND (t.scene IS NULL OR TRIM(t.scene) = '')";
+    } else {
+      whereClause += ' AND t.scene = ?';
+      params.push(filter.scene);
+    }
+  }
+
+  if (filter.exactRemark !== undefined) {
+    whereClause += " AND TRIM(COALESCE(t.remark, '')) = ?";
+    params.push(filter.exactRemark);
+  }
+
+  const trimmedSearch = filter.search?.trim() || '';
+  if (trimmedSearch) {
+    const pattern = `%${escapeLikePattern(trimmedSearch)}%`;
+    whereClause += ` AND (
+      COALESCE(t.remark, '') LIKE ? ESCAPE '\\'
+      OR COALESCE(t.scene, '') LIKE ? ESCAPE '\\'
+      OR COALESCE(c.name, '') LIKE ? ESCAPE '\\'
+      OR COALESCE(a.name, '') LIKE ? ESCAPE '\\'
+      OR COALESCE(da.name, '') LIKE ? ESCAPE '\\'
+      OR COALESCE(i.name, '') LIKE ? ESCAPE '\\'
+      OR printf('%.2f', t.amount / 100.0) LIKE ? ESCAPE '\\'
+    )`;
+    params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
+  }
+
+  return { whereClause, params };
+}
+
+// 获取常用与历史消费场景列表
+transactionsRouter.get('/scenes', async (c) => {
+  const user = c.get('user');
+  const { results } = await c.env.DB.prepare(
+    `SELECT scene, COUNT(*) AS count
+     FROM transactions
+     WHERE user_id = ? AND scene IS NOT NULL AND TRIM(scene) != ''
+     GROUP BY scene
+     ORDER BY count DESC, scene ASC`
+  )
+    .bind(user.id)
+    .all<{ scene: string; count: number }>();
+
+  const countMap: Record<string, number> = {};
+  const merged: string[] = [];
+  for (const row of results) {
+    if (row.scene) {
+      countMap[row.scene] = row.count;
+      merged.push(row.scene);
+    }
+  }
+  for (const preset of PRESET_SCENES) {
+    if (!merged.includes(preset)) merged.push(preset);
+  }
+
+  return c.json({
+    scenes: merged,
+    presets: PRESET_SCENES,
+    used: results,
+  });
+});
+
+type BatchScope = 'ids' | 'category' | 'account' | 'account_category' | 'remark' | 'filter';
+
+function buildBatchFilterInput(body: any, scope: Exclude<BatchScope, 'ids'>): { filterInput?: TxFilterInput; error?: string } {
+  if (scope === 'filter') {
+    const f = body?.filter || {};
+    return {
+      filterInput: {
+        month: typeof f.month === 'string' ? f.month : undefined,
+        startDate: typeof f.start_date === 'string' ? f.start_date : undefined,
+        endDate: typeof f.end_date === 'string' ? f.end_date : undefined,
+        accountId: typeof f.account_id === 'string' ? f.account_id : undefined,
+        categoryId: typeof f.category_id === 'string' ? f.category_id : undefined,
+        type: typeof f.type === 'string' ? f.type : undefined,
+        scene: typeof f.scene === 'string' ? f.scene : undefined,
+        search: typeof f.search === 'string' ? f.search : undefined,
+      },
+    };
+  }
+
+  const txType = body?.type === 'income' ? 'income' : body?.type === 'expense' ? 'expense' : undefined;
+  if (scope === 'remark') {
+    const exactRemark = typeof body?.remark === 'string' ? body.remark.trim() : '';
+    if (!exactRemark) {
+      return { error: '缺少备注/商户内容，无法按同类备注批量操作' };
+    }
+    return {
+      filterInput: {
+        type: txType,
+        exactRemark,
+        startDate: typeof body?.start_date === 'string' ? body.start_date : undefined,
+        endDate: typeof body?.end_date === 'string' ? body.end_date : undefined,
+      },
+    };
+  }
+  const categoryId = typeof body?.category_id === 'string' ? body.category_id.trim() : '';
+  const accountId = typeof body?.account_id === 'string' ? body.account_id.trim() : '';
+
+  if ((scope === 'category' || scope === 'account_category') && !categoryId) {
+    return { error: '缺少分类参数，无法按分类批量操作' };
+  }
+  if ((scope === 'account' || scope === 'account_category') && !accountId) {
+    return { error: '缺少账户参数，无法按账户批量操作' };
+  }
+
+  return {
+    filterInput: {
+      type: txType,
+      categoryId: scope === 'category' || scope === 'account_category' ? categoryId : undefined,
+      accountId: scope === 'account' || scope === 'account_category' ? accountId : undefined,
+      startDate: typeof body?.start_date === 'string' ? body.start_date : undefined,
+      endDate: typeof body?.end_date === 'string' ? body.end_date : undefined,
+    },
+  };
+}
+
+function normalizeBatchIds(rawIds: unknown): string[] {
+  if (!Array.isArray(rawIds)) return [];
+  return Array.from(
+    new Set(
+      rawIds
+        .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        .map((v) => v.trim())
+    )
+  ).slice(0, 500);
+}
+
+// 按多选ID / 分类 / 账户 / 组合 / 当前筛选条件批量标记消费场景（支持 preview 统计数量）
+transactionsRouter.patch('/batch-scene', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json();
+  const scope = body?.scope as BatchScope;
+  const isPreview = Boolean(body?.preview);
+  const normalizedScene = normalizeScene(body?.scene);
+  const onlyUntagged = body?.only_untagged !== undefined ? Boolean(body.only_untagged) : true;
+
+  if (!['ids', 'category', 'account', 'account_category', 'remark', 'filter'].includes(scope)) {
+    return c.json({ error: '无效的批量标记范围' }, 400);
+  }
+
+  const untaggedSql =
+    onlyUntagged && normalizedScene !== null ? " AND (scene IS NULL OR TRIM(scene) = '')" : '';
+
+  if (scope === 'ids') {
+    const ids = normalizeBatchIds(body?.ids);
+    if (ids.length === 0) {
+      return isPreview
+        ? c.json({ total_count: 0, untagged_count: 0 })
+        : c.json({ error: '请先选择要标记的流水' }, 400);
+    }
+
+    const CHUNK = 80;
+    if (isPreview) {
+      let totalCount = 0;
+      let untaggedCount = 0;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        const placeholders = slice.map(() => '?').join(',');
+        const row = await c.env.DB.prepare(
+          `SELECT
+            COUNT(*) AS total_count,
+            COALESCE(SUM(CASE WHEN scene IS NULL OR TRIM(scene) = '' THEN 1 ELSE 0 END), 0) AS untagged_count
+           FROM transactions
+           WHERE user_id = ? AND type != 'transfer' AND id IN (${placeholders})`
+        )
+          .bind(user.id, ...slice)
+          .first<{ total_count: number; untagged_count: number }>();
+        totalCount += row?.total_count || 0;
+        untaggedCount += row?.untagged_count || 0;
+      }
+      return c.json({ total_count: totalCount, untagged_count: untaggedCount });
+    }
+
+    let updated = 0;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK);
+      const placeholders = slice.map(() => '?').join(',');
+      const res = await c.env.DB.prepare(
+        `UPDATE transactions
+         SET scene = ?
+         WHERE user_id = ? AND type != 'transfer' ${untaggedSql} AND id IN (${placeholders})`
+      )
+        .bind(normalizedScene, user.id, ...slice)
+        .run();
+      updated += res.meta.changes || 0;
+    }
+
+    return c.json({
+      updated,
+      scene: normalizedScene,
+      message: normalizedScene
+        ? `已为 ${updated} 笔流水批量标记「${normalizedScene}」`
+        : `已清除 ${updated} 笔流水的消费场景`,
+    });
+  }
+
+  const resolved = buildBatchFilterInput(body, scope);
+  if (resolved.error || !resolved.filterInput) {
+    return c.json({ error: resolved.error || '参数无效' }, 400);
+  }
+  const { whereClause, params } = buildTransactionFilterClause(user.id, {
+    ...resolved.filterInput,
+    type: resolved.filterInput.type || (scope !== 'filter' ? 'expense' : undefined),
+  });
+  const targetSubquery = `
+    SELECT t.id
+    ${TX_LIST_JOINS}
+    ${whereClause}
+    AND t.type != 'transfer'
+  `;
+
+  if (isPreview) {
+    const counts = await c.env.DB.prepare(
+      `SELECT
+        COUNT(*) AS total_count,
+        COALESCE(SUM(CASE WHEN scene IS NULL OR TRIM(scene) = '' THEN 1 ELSE 0 END), 0) AS untagged_count
+       FROM transactions
+       WHERE user_id = ? AND id IN (${targetSubquery})`
+    )
+      .bind(user.id, ...params)
+      .first<{ total_count: number; untagged_count: number }>();
+
+    return c.json({
+      total_count: counts?.total_count || 0,
+      untagged_count: counts?.untagged_count || 0,
+    });
+  }
+
+  const updateRes = await c.env.DB.prepare(
+    `UPDATE transactions
+     SET scene = ?
+     WHERE user_id = ?
+       AND type != 'transfer'
+       ${untaggedSql}
+       AND id IN (${targetSubquery})`
+  )
+    .bind(normalizedScene, user.id, ...params)
+    .run();
+
+  const updated = updateRes.meta.changes || 0;
+  return c.json({
+    updated,
+    scene: normalizedScene,
+    message: normalizedScene
+      ? `已为 ${updated} 笔流水批量标记「${normalizedScene}」`
+      : `已清除 ${updated} 笔流水的消费场景`,
+  });
+});
+
+// 批量修改分类（支持按多选 ID / 筛选结果 / 原分类 / 账户 / 账户+分类，自动按目标分类收支类型隔离防护）
+transactionsRouter.patch('/batch-category', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json();
+  const scope = body?.scope as BatchScope;
+  const isPreview = Boolean(body?.preview);
+  const targetCategoryId = typeof body?.target_category_id === 'string' ? body.target_category_id.trim() : '';
+  const onlyUncategorized = Boolean(body?.only_uncategorized);
+
+  if (!['ids', 'category', 'account', 'account_category', 'remark', 'filter'].includes(scope)) {
+    return c.json({ error: '无效的批量分类范围' }, 400);
+  }
+
+  let targetCategory: { id: string; name: string; type: 'expense' | 'income' } | null = null;
+  if (targetCategoryId) {
+    targetCategory = await c.env.DB.prepare(
+      'SELECT id, name, type FROM categories WHERE id = ? AND user_id = ?'
+    )
+      .bind(targetCategoryId, user.id)
+      .first<{ id: string; name: string; type: 'expense' | 'income' }>();
+    if (!targetCategory) {
+      return c.json({ error: '目标分类不存在或无权限' }, 400);
+    }
+  } else if (!isPreview) {
+    return c.json({ error: '请选择目标分类' }, 400);
+  }
+
+  const uncatSql = onlyUncategorized ? " AND (category_id IS NULL OR category_id = '')" : '';
+  const CHUNK = 80;
+
+  if (scope === 'ids') {
+    const ids = normalizeBatchIds(body?.ids);
+    if (ids.length === 0) {
+      return isPreview
+        ? c.json({ total_count: 0, expense_count: 0, income_count: 0, eligible_count: 0 })
+        : c.json({ error: '请先选择要调整分类的流水' }, 400);
+    }
+
+    if (isPreview) {
+      let totalCount = 0;
+      let expenseCount = 0;
+      let incomeCount = 0;
+      let eligibleCount = 0;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        const placeholders = slice.map(() => '?').join(',');
+        const row = await c.env.DB.prepare(
+          `SELECT
+            COUNT(*) AS total_count,
+            COALESCE(SUM(CASE WHEN type = 'expense' THEN 1 ELSE 0 END), 0) AS expense_count,
+            COALESCE(SUM(CASE WHEN type = 'income' THEN 1 ELSE 0 END), 0) AS income_count,
+            COALESCE(SUM(CASE WHEN type = ? ${uncatSql} THEN 1 ELSE 0 END), 0) AS eligible_count
+           FROM transactions
+           WHERE user_id = ? AND type IN ('expense', 'income') AND id IN (${placeholders})`
+        )
+          .bind(targetCategory?.type || 'expense', user.id, ...slice)
+          .first<{ total_count: number; expense_count: number; income_count: number; eligible_count: number }>();
+        totalCount += row?.total_count || 0;
+        expenseCount += row?.expense_count || 0;
+        incomeCount += row?.income_count || 0;
+        eligibleCount += row?.eligible_count || 0;
+      }
+      return c.json({
+        total_count: totalCount,
+        expense_count: expenseCount,
+        income_count: incomeCount,
+        eligible_count: eligibleCount,
+      });
+    }
+
+    let updated = 0;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK);
+      const placeholders = slice.map(() => '?').join(',');
+      const res = await c.env.DB.prepare(
+        `UPDATE transactions
+         SET category_id = ?
+         WHERE user_id = ? AND type = ? ${uncatSql} AND id IN (${placeholders})`
+      )
+        .bind(targetCategory!.id, user.id, targetCategory!.type, ...slice)
+        .run();
+      updated += res.meta.changes || 0;
+    }
+
+    return c.json({
+      updated,
+      category_id: targetCategory!.id,
+      category_name: targetCategory!.name,
+      message: `已将 ${updated} 笔${targetCategory!.type === 'expense' ? '支出' : '收入'}归类到「${targetCategory!.name}」`,
+    });
+  }
+
+  const resolved = buildBatchFilterInput(body, scope);
+  if (resolved.error || !resolved.filterInput) {
+    return c.json({ error: resolved.error || '参数无效' }, 400);
+  }
+  const { whereClause, params } = buildTransactionFilterClause(user.id, resolved.filterInput);
+  const targetSubquery = `
+    SELECT t.id
+    ${TX_LIST_JOINS}
+    ${whereClause}
+    AND t.type IN ('expense', 'income')
+  `;
+
+  if (isPreview) {
+    const counts = await c.env.DB.prepare(
+      `SELECT
+        COUNT(*) AS total_count,
+        COALESCE(SUM(CASE WHEN type = 'expense' THEN 1 ELSE 0 END), 0) AS expense_count,
+        COALESCE(SUM(CASE WHEN type = 'income' THEN 1 ELSE 0 END), 0) AS income_count,
+        COALESCE(SUM(CASE WHEN type = ? ${uncatSql} THEN 1 ELSE 0 END), 0) AS eligible_count
+       FROM transactions
+       WHERE user_id = ? AND id IN (${targetSubquery})`
+    )
+      .bind(targetCategory?.type || 'expense', user.id, ...params)
+      .first<{ total_count: number; expense_count: number; income_count: number; eligible_count: number }>();
+
+    return c.json({
+      total_count: counts?.total_count || 0,
+      expense_count: counts?.expense_count || 0,
+      income_count: counts?.income_count || 0,
+      eligible_count: counts?.eligible_count || 0,
+    });
+  }
+
+  const updateRes = await c.env.DB.prepare(
+    `UPDATE transactions
+     SET category_id = ?
+     WHERE user_id = ?
+       AND type = ?
+       ${uncatSql}
+       AND id IN (${targetSubquery})`
+  )
+    .bind(targetCategory!.id, user.id, targetCategory!.type, ...params)
+    .run();
+
+  const updated = updateRes.meta.changes || 0;
+  return c.json({
+    updated,
+    category_id: targetCategory!.id,
+    category_name: targetCategory!.name,
+    message: `已将 ${updated} 笔${targetCategory!.type === 'expense' ? '支出' : '收入'}归类到「${targetCategory!.name}」`,
+  });
+});
+
 // 查询流水列表
 transactionsRouter.get('/', async (c) => {
   const user = c.get('user');
-  const month = c.req.query('month'); // YYYY-MM
-  const accountId = c.req.query('account_id');
-  const categoryId = c.req.query('category_id');
-  const type = c.req.query('type');
-  const limit = Math.min(Number(c.req.query('limit')) || 50, 200);
+  const sort = c.req.query('sort') || 'time_desc';
+  const limit = Math.min(Number(c.req.query('limit')) || 100, 500);
   const offset = Number(c.req.query('offset')) || 0;
 
-  let whereClause = 'WHERE t.user_id = ?';
-  const params: any[] = [user.id];
+  const { whereClause, params } = buildTransactionFilterClause(user.id, {
+    month: c.req.query('month'),
+    startDate: c.req.query('start_date'),
+    endDate: c.req.query('end_date'),
+    accountId: c.req.query('account_id'),
+    categoryId: c.req.query('category_id'),
+    type: c.req.query('type'),
+    scene: c.req.query('scene'),
+    search: c.req.query('search'),
+  });
 
-  if (month) {
-    whereClause += ' AND t.transaction_time LIKE ?';
-    params.push(`${month}%`);
-  }
-
-  if (accountId) {
-    whereClause += ' AND (t.account_id = ? OR t.destination_account_id = ?)';
-    params.push(accountId, accountId);
-  }
-
-  if (categoryId) {
-    whereClause += ' AND t.category_id = ?';
-    params.push(categoryId);
-  }
-
-  if (type) {
-    whereClause += ' AND t.type = ?';
-    params.push(type);
-  }
+  const orderByClause =
+    sort === 'amount_desc'
+      ? 'ORDER BY t.amount DESC, t.transaction_time DESC'
+      : 'ORDER BY t.transaction_time DESC, t.created_at DESC';
 
   const querySql = `
     SELECT 
@@ -148,10 +624,13 @@ transactionsRouter.get('/', async (c) => {
       t.category_id,
       t.transaction_time,
       t.remark,
+      t.scene,
       t.amortize_days,
       t.amortize_start_date,
       COALESCE(t.exclude_daily_cost, 0) AS exclude_daily_cost,
       t.item_id,
+      t.source,
+      t.external_id,
       t.created_at,
       a.name AS account_name,
       da.name AS destination_account_name,
@@ -161,25 +640,21 @@ transactionsRouter.get('/', async (c) => {
       i.name AS item_name,
       (SELECT COUNT(*) FROM transaction_photos p WHERE p.transaction_id = t.id) AS photo_count,
       (SELECT p.id FROM transaction_photos p WHERE p.transaction_id = t.id ORDER BY p.created_at ASC LIMIT 1) AS first_photo_id
-    FROM transactions t
-    LEFT JOIN accounts a ON t.account_id = a.id
-    LEFT JOIN accounts da ON t.destination_account_id = da.id
-    LEFT JOIN categories c ON t.category_id = c.id
-    LEFT JOIN items i ON t.item_id = i.id
+    ${TX_LIST_JOINS}
     ${whereClause}
-    ORDER BY t.transaction_time DESC, t.created_at DESC
+    ${orderByClause}
     LIMIT ? OFFSET ?
   `;
 
   const { results } = await c.env.DB.prepare(querySql).bind(...params, limit, offset).all<Transaction>();
 
-  // 统计当前筛选条件下的总收支
+  // 统计当前筛选条件下的总收支（复用相同 LEFT JOIN 以支持 search 对分类/账户/大件名的过滤）
   const sumSql = `
     SELECT 
       COALESCE(SUM(CASE WHEN t.type = 'expense' THEN t.amount ELSE 0 END), 0) AS total_expense,
       COALESCE(SUM(CASE WHEN t.type = 'income' THEN t.amount ELSE 0 END), 0) AS total_income,
       COALESCE(COUNT(*), 0) AS total_count
-    FROM transactions t
+    ${TX_LIST_JOINS}
     ${whereClause}
   `;
 
@@ -231,6 +706,7 @@ transactionsRouter.post('/', async (c) => {
     category_id,
     transaction_time,
     remark,
+    scene,
     amortize_days,
     amortize_start_date,
     exclude_daily_cost,
@@ -312,8 +788,8 @@ transactionsRouter.post('/', async (c) => {
   }
 
   await c.env.DB.prepare(
-    `INSERT INTO transactions (id, user_id, type, amount, account_id, destination_account_id, category_id, transaction_time, remark, amortize_days, amortize_start_date, exclude_daily_cost, item_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO transactions (id, user_id, type, amount, account_id, destination_account_id, category_id, transaction_time, remark, scene, amortize_days, amortize_start_date, exclude_daily_cost, item_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id,
     user.id,
@@ -321,9 +797,10 @@ transactionsRouter.post('/', async (c) => {
     numAmount,
     account_id,
     type === 'transfer' ? destination_account_id : null,
-    type !== 'transfer' ? category_id : null,
+    type !== 'transfer' ? (typeof category_id === 'string' && category_id.trim() ? category_id.trim() : null) : null,
     time,
     remark?.trim() || (createdItemId ? `购买大件: ${(item_details?.name || '').trim()}` : null),
+    normalizeScene(scene),
     dailyCost.amortizeDays,
     dailyCost.amortizeStartDate,
     dailyCost.excludeDailyCost,
@@ -433,6 +910,30 @@ transactionsRouter.post('/:id/convert-to-item', async (c) => {
   return c.json({ item_id: itemId, message: '已将该笔开销转为持物大件' });
 });
 
+// 单独更新或清除某笔流水的消费场景
+transactionsRouter.patch('/:id/scene', async (c) => {
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const normalizedScene = normalizeScene(body?.scene);
+
+  const res = await c.env.DB.prepare(
+    'UPDATE transactions SET scene = ? WHERE id = ? AND user_id = ?'
+  )
+    .bind(normalizedScene, id, user.id)
+    .run();
+
+  if (res.meta.changes === 0) {
+    return c.json({ error: '未找到该流水记录' }, 404);
+  }
+
+  return c.json({
+    id,
+    scene: normalizedScene,
+    message: normalizedScene ? `已标记场景「${normalizedScene}」` : '已清除消费场景',
+  });
+});
+
 // 修改流水
 transactionsRouter.put('/:id', async (c) => {
   const user = c.get('user');
@@ -446,6 +947,7 @@ transactionsRouter.put('/:id', async (c) => {
     category_id,
     transaction_time,
     remark,
+    scene,
     amortize_days,
     amortize_start_date,
     exclude_daily_cost,
@@ -473,16 +975,17 @@ transactionsRouter.put('/:id', async (c) => {
 
   const res = await c.env.DB.prepare(
     `UPDATE transactions 
-     SET type = ?, amount = ?, account_id = ?, destination_account_id = ?, category_id = ?, transaction_time = ?, remark = ?, amortize_days = ?, amortize_start_date = ?, exclude_daily_cost = ?
+     SET type = ?, amount = ?, account_id = ?, destination_account_id = ?, category_id = ?, transaction_time = ?, remark = ?, scene = ?, amortize_days = ?, amortize_start_date = ?, exclude_daily_cost = ?
      WHERE id = ? AND user_id = ?`
   ).bind(
     type,
     numAmount,
     account_id,
     type === 'transfer' ? destination_account_id : null,
-    type !== 'transfer' ? category_id : null,
+    type !== 'transfer' ? (typeof category_id === 'string' && category_id.trim() ? category_id.trim() : null) : null,
     time,
     remark?.trim() || null,
+    normalizeScene(scene),
     dailyCost.amortizeDays,
     dailyCost.amortizeStartDate,
     dailyCost.excludeDailyCost,
@@ -528,5 +1031,341 @@ transactionsRouter.delete('/:id', async (c) => {
   }
 
   return c.json({ message: '删除成功' });
+});
+
+// 查询已导入的外部交易单号，用于导入前自动标记重复记录
+transactionsRouter.post('/import/check-duplicates', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json();
+  const rawIds: unknown = body?.external_ids;
+  if (!Array.isArray(rawIds)) {
+    return c.json({ error: 'external_ids 必须为数组' }, 400);
+  }
+
+  const uniqueIds = Array.from(
+    new Set(
+      rawIds
+        .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        .map((v) => v.trim())
+    )
+  ).slice(0, 2000);
+
+  if (uniqueIds.length === 0) {
+    return c.json({ existing_ids: [] });
+  }
+
+  const existingIds: string[] = [];
+  const CHUNK = 80;
+  for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+    const slice = uniqueIds.slice(i, i + CHUNK);
+    const placeholders = slice.map(() => '?').join(',');
+    const { results } = await c.env.DB.prepare(
+      `SELECT external_id FROM transactions WHERE user_id = ? AND external_id IN (${placeholders})`
+    )
+      .bind(user.id, ...slice)
+      .all<{ external_id: string }>();
+
+    for (const r of results) {
+      if (r.external_id) existingIds.push(r.external_id);
+    }
+  }
+
+  return c.json({ existing_ids: existingIds });
+});
+
+// 批量导入账单流水（支持微信/支付宝等对账单，带严格幂等去重）
+transactionsRouter.post('/import', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json();
+  const rows = body?.rows;
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return c.json({ error: '导入记录不能为空' }, 400);
+  }
+  if (rows.length > 500) {
+    return c.json({ error: '单次最多提交 500 条记录，请分批导入' }, 400);
+  }
+
+  const [{ results: userAccounts }, { results: userCategories }] = await Promise.all([
+    c.env.DB.prepare('SELECT id FROM accounts WHERE user_id = ?').bind(user.id).all<{ id: string }>(),
+    c.env.DB.prepare('SELECT id FROM categories WHERE user_id = ?').bind(user.id).all<{ id: string }>(),
+  ]);
+  const accountSet = new Set(userAccounts.map((a) => a.id));
+  const categorySet = new Set(userCategories.map((cat) => cat.id));
+
+  // 查询库内已存在的 external_id
+  const candidateExtIds = Array.from(
+    new Set(
+      rows
+        .map((r: any) => (typeof r?.external_id === 'string' ? r.external_id.trim() : ''))
+        .filter((id: string) => id.length > 0)
+    )
+  );
+  const existingSet = new Set<string>();
+  const CHUNK = 80;
+  for (let i = 0; i < candidateExtIds.length; i += CHUNK) {
+    const slice = candidateExtIds.slice(i, i + CHUNK);
+    const placeholders = slice.map(() => '?').join(',');
+    const { results } = await c.env.DB.prepare(
+      `SELECT external_id FROM transactions WHERE user_id = ? AND external_id IN (${placeholders})`
+    )
+      .bind(user.id, ...slice)
+      .all<{ external_id: string }>();
+    for (const r of results) {
+      if (r.external_id) existingSet.add(r.external_id);
+    }
+  }
+
+  let skippedDuplicates = 0;
+  let skippedInvalid = 0;
+  const statements: D1PreparedStatement[] = [];
+
+  for (const row of rows) {
+    const type = row?.type;
+    const amount = Math.round(Number(row?.amount));
+    const accountId = typeof row?.account_id === 'string' ? row.account_id.trim() : '';
+    const destAccountId =
+      typeof row?.destination_account_id === 'string' && row.destination_account_id.trim()
+        ? row.destination_account_id.trim()
+        : null;
+    const extId = typeof row?.external_id === 'string' && row.external_id.trim() ? row.external_id.trim().slice(0, 128) : null;
+
+    if (extId && existingSet.has(extId)) {
+      skippedDuplicates++;
+      continue;
+    }
+
+    if (
+      !['expense', 'income', 'transfer'].includes(type) ||
+      isNaN(amount) ||
+      amount <= 0 ||
+      !accountSet.has(accountId) ||
+      (type === 'transfer' && (!destAccountId || destAccountId === accountId || !accountSet.has(destAccountId)))
+    ) {
+      skippedInvalid++;
+      continue;
+    }
+
+    const timeStr = normalizeTimeString(row?.transaction_time);
+    const dailyCost = normalizeDailyCostFields(
+      type,
+      row?.amortize_days,
+      row?.amortize_start_date,
+      row?.exclude_daily_cost,
+      timeStr
+    );
+    if (dailyCost.error) {
+      skippedInvalid++;
+      continue;
+    }
+
+    const catId =
+      type !== 'transfer' && typeof row?.category_id === 'string' && categorySet.has(row.category_id)
+        ? row.category_id
+        : null;
+    const source = ['wechat', 'alipay', 'shortcut', 'manual'].includes(row?.source) ? row.source : 'manual';
+    const remark = typeof row?.remark === 'string' && row.remark.trim() ? row.remark.trim().slice(0, 160) : null;
+    const rowScene = normalizeScene(row?.scene);
+    const id = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+
+    if (extId) existingSet.add(extId);
+
+    statements.push(
+      c.env.DB.prepare(
+        `INSERT INTO transactions (id, user_id, type, amount, account_id, destination_account_id, category_id, transaction_time, remark, scene, amortize_days, amortize_start_date, exclude_daily_cost, source, external_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        id,
+        user.id,
+        type,
+        amount,
+        accountId,
+        type === 'transfer' ? destAccountId : null,
+        catId,
+        timeStr,
+        remark,
+        rowScene,
+        dailyCost.amortizeDays,
+        dailyCost.amortizeStartDate,
+        dailyCost.excludeDailyCost,
+        source,
+        extId
+      )
+    );
+  }
+
+  for (let i = 0; i < statements.length; i += CHUNK) {
+    await c.env.DB.batch(statements.slice(i, i + CHUNK));
+  }
+
+  return c.json({
+    imported: statements.length,
+    skipped_duplicates: skippedDuplicates,
+    skipped_invalid: skippedInvalid,
+    message: `成功导入 ${statements.length} 笔，跳过重复 ${skippedDuplicates} 笔`,
+  });
+});
+
+// iOS 快捷指令 / 手机自动化极速记账接口（支持按名称模糊匹配、文本自动提取金额、默认元单位）
+transactionsRouter.post('/quick', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json();
+
+  const parsedText = parseQuickText(body?.text);
+  const rawExternalId =
+    typeof body?.external_id === 'string' && body.external_id.trim()
+      ? `sc:${body.external_id.trim().slice(0, 120)}`
+      : null;
+
+  if (rawExternalId) {
+    const dup = await c.env.DB.prepare(
+      'SELECT id FROM transactions WHERE user_id = ? AND external_id = ?'
+    )
+      .bind(user.id, rawExternalId)
+      .first<{ id: string }>();
+    if (dup) {
+      return c.json({ id: dup.id, duplicate: true, message: '该请求已记录，已自动去重跳过' });
+    }
+  }
+
+  const finalType: 'expense' | 'income' | 'transfer' = ['expense', 'income', 'transfer'].includes(body?.type)
+    ? body.type
+    : parsedText.type || 'expense';
+
+  let amountCents = 0;
+  if (body?.amount_cents !== undefined && body?.amount_cents !== null && body?.amount_cents !== '') {
+    amountCents = Math.round(Number(body.amount_cents));
+  } else if (body?.amount !== undefined && body?.amount !== null && body?.amount !== '') {
+    const rawNum = Number(String(body.amount).replace(/[¥￥,\s元]/g, ''));
+    amountCents = body?.unit === 'cents' ? Math.round(rawNum) : Math.round(rawNum * 100);
+  } else if (parsedText.amountYuan !== undefined) {
+    amountCents = Math.round(parsedText.amountYuan * 100);
+  }
+
+  if (isNaN(amountCents) || amountCents <= 0) {
+    return c.json({ error: '未能识别有效金额，请传入 amount（元）或包含金额的 text' }, 400);
+  }
+
+  const [{ results: accounts }, { results: categories }, { results: userRules }] = await Promise.all([
+    c.env.DB.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY sort_order ASC, created_at ASC')
+      .bind(user.id)
+      .all<Account>(),
+    c.env.DB.prepare('SELECT * FROM categories WHERE user_id = ? ORDER BY sort_order ASC, created_at ASC')
+      .bind(user.id)
+      .all<Category>(),
+    c.env.DB.prepare(
+      'SELECT * FROM auto_rules WHERE user_id = ? AND enabled = 1 ORDER BY priority DESC, created_at ASC'
+    )
+      .bind(user.id)
+      .all<AutoRuleLike>(),
+  ]);
+
+  if (accounts.length === 0) {
+    return c.json({ error: '请先在网页端创建至少一个记账账户' }, 400);
+  }
+
+  const account = matchAccount(accounts, body?.account_id || body?.account || parsedText.accountHint);
+  if (!account) {
+    return c.json({ error: '未匹配到有效账户' }, 400);
+  }
+
+  let destAccount: Account | undefined;
+  if (finalType === 'transfer') {
+    const destHint = body?.destination_account_id || body?.destination_account;
+    destAccount = destHint ? matchAccount(accounts, destHint) : undefined;
+    if (!destAccount || destAccount.id === account.id) {
+      return c.json({ error: '转账模式下请传入不同的 destination_account' }, 400);
+    }
+  }
+
+  const finalRemark =
+    (typeof body?.remark === 'string' && body.remark.trim()) ||
+    parsedText.remark ||
+    '快捷指令记账';
+
+  const ruleMatch =
+    finalType !== 'transfer'
+      ? matchAutoRules(userRules, {
+          type: finalType,
+          text: `${finalRemark} ${body?.text || ''}`,
+          accountId: account.id,
+        })
+      : { categoryId: null, scene: null };
+
+  const ruleMatchedCat =
+    ruleMatch.categoryId
+      ? categories.find((cat) => cat.id === ruleMatch.categoryId && cat.type === finalType)
+      : undefined;
+
+  const matchedCategory =
+    finalType !== 'transfer'
+      ? !body?.category_id && !body?.category && ruleMatchedCat
+        ? ruleMatchedCat
+        : matchCategory(
+            categories,
+            finalType,
+            body?.category_id || body?.category,
+            `${finalRemark} ${body?.text || ''}`
+          )
+      : undefined;
+
+  const finalTime = normalizeTimeString(body?.transaction_time);
+  const dailyCost = normalizeDailyCostFields(
+    finalType,
+    body?.amortize_days,
+    body?.amortize_start_date,
+    body?.exclude_daily_cost,
+    finalTime
+  );
+  if (dailyCost.error) {
+    return c.json({ error: dailyCost.error }, 400);
+  }
+
+  const finalScene = normalizeScene(body?.scene) || normalizeScene(ruleMatch.scene);
+  const id = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  await c.env.DB.prepare(
+    `INSERT INTO transactions (id, user_id, type, amount, account_id, destination_account_id, category_id, transaction_time, remark, scene, amortize_days, amortize_start_date, exclude_daily_cost, source, external_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'shortcut', ?)`
+  )
+    .bind(
+      id,
+      user.id,
+      finalType,
+      amountCents,
+      account.id,
+      finalType === 'transfer' && destAccount ? destAccount.id : null,
+      matchedCategory ? matchedCategory.id : null,
+      finalTime,
+      finalRemark.slice(0, 160),
+      finalScene,
+      dailyCost.amortizeDays,
+      dailyCost.amortizeStartDate,
+      dailyCost.excludeDailyCost,
+      rawExternalId
+    )
+    .run();
+
+  const amountYuanStr = (amountCents / 100).toFixed(2);
+  const actionLabel = finalType === 'expense' ? '支出' : finalType === 'income' ? '收入' : '转账';
+  const summaryLabel =
+    finalType === 'transfer' && destAccount
+      ? `${account.name} → ${destAccount.name}`
+      : `${account.name} · ${matchedCategory?.name || '未分类'}`;
+
+  return c.json({
+    id,
+    duplicate: false,
+    type: finalType,
+    amount: amountCents,
+    amount_yuan: amountYuanStr,
+    account_id: account.id,
+    account_name: account.name,
+    category_id: matchedCategory?.id || null,
+    category_name: matchedCategory?.name || null,
+    transaction_time: finalTime,
+    remark: finalRemark,
+    source: 'shortcut',
+    message: `已记账：${summaryLabel} ${actionLabel} ¥${amountYuanStr}（${finalRemark}）`,
+  });
 });
 

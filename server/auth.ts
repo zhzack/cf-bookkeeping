@@ -55,19 +55,66 @@ export async function createSessionToken(user: UserSession, secret: string): Pro
   return await sign(payload, secret, 'HS256');
 }
 
-// 鉴权中间件
+export async function hashToken(rawToken: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawToken));
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// 鉴权中间件（支持登录 Cookie/JWT 及快捷指令长期 API Token）
 export async function requireAuth(c: Context<{ Bindings: Env; Variables: { user: UserSession } }>, next: Next) {
   let token = getCookie(c, 'auth_token');
 
   if (!token) {
     const authHeader = c.req.header('Authorization');
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7);
+      token = authHeader.substring(7).trim();
     }
   }
 
   if (!token) {
     return c.json({ error: '未登录，请先登录' }, 401);
+  }
+
+  // 个人长期 API Token 认证（供 iOS 快捷指令 / 自动化调用）
+  if (token.startsWith('cbk_live_')) {
+    try {
+      const tokenHash = await hashToken(token);
+      const row = await c.env.DB.prepare(
+        `SELECT t.id AS token_id, u.id, u.username, u.nickname
+         FROM api_tokens t
+         JOIN users u ON t.user_id = u.id
+         WHERE t.token_hash = ?`
+      )
+        .bind(tokenHash)
+        .first<{ token_id: string; id: string; username: string; nickname: string }>();
+
+      if (!row) {
+        return c.json({ error: 'API Token 无效或已被撤销' }, 401);
+      }
+
+      const touchPromise = c.env.DB.prepare(
+        'UPDATE api_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?'
+      )
+        .bind(row.token_id)
+        .run();
+      try {
+        c.executionCtx.waitUntil(touchPromise);
+      } catch {
+        await touchPromise;
+      }
+
+      c.set('user', {
+        id: row.id,
+        username: row.username,
+        nickname: row.nickname,
+      });
+      await next();
+      return;
+    } catch {
+      return c.json({ error: 'API Token 验证失败' }, 401);
+    }
   }
 
   try {
