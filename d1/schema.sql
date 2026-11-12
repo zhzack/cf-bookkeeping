@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS transactions (
     category_id TEXT, -- 支出/收入分类
     transaction_time TEXT NOT NULL, -- ISO字符串或 YYYY-MM-DD HH:mm:ss
     remark TEXT,
+    amortize_days INTEGER DEFAULT NULL, -- 固定开销摊销天数（>1 时按天分摊到每日生活成本）
+    amortize_start_date TEXT DEFAULT NULL, -- 摊销起始日期 (YYYY-MM-DD)
+    exclude_daily_cost INTEGER DEFAULT 0, -- 是否排除出每日生活成本计算（如大件同步流水避免重复）
+    item_id TEXT DEFAULT NULL, -- 关联的大件物品 ID（记账转大件/大件同步流水）
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -59,6 +63,23 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE INDEX IF NOT EXISTS idx_trans_user_time ON transactions(user_id, transaction_time DESC);
 CREATE INDEX IF NOT EXISTS idx_trans_account ON transactions(account_id);
 CREATE INDEX IF NOT EXISTS idx_trans_category ON transactions(category_id);
+CREATE INDEX IF NOT EXISTS idx_trans_item ON transactions(item_id);
+
+-- 交易流水照片表（压缩后的图片 Data URL，零额外对象存储依赖）
+CREATE TABLE IF NOT EXISTS transaction_photos (
+    id TEXT PRIMARY KEY,
+    transaction_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    mime_type TEXT NOT NULL DEFAULT 'image/jpeg',
+    data_url TEXT NOT NULL,
+    size_bytes INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tx_photos_tx ON transaction_photos(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_tx_photos_user ON transaction_photos(user_id);
 
 -- 大件物品与使用寿命/日均成本表
 CREATE TABLE IF NOT EXISTS items (
@@ -96,4 +117,20 @@ CREATE TABLE IF NOT EXISTS item_expenses (
 );
 
 CREATE INDEX IF NOT EXISTS idx_item_exp_item ON item_expenses(item_id);
+
+-- 持物大件照片表
+CREATE TABLE IF NOT EXISTS item_photos (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    mime_type TEXT NOT NULL DEFAULT 'image/jpeg',
+    data_url TEXT NOT NULL,
+    size_bytes INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_photos_item ON item_photos(item_id);
+CREATE INDEX IF NOT EXISTS idx_item_photos_user ON item_photos(user_id);
 
