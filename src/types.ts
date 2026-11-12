@@ -39,6 +39,10 @@ export interface Transaction {
   category_id?: string | null;
   transaction_time: string;
   remark?: string | null;
+  amortize_days?: number | null;
+  amortize_start_date?: string | null;
+  exclude_daily_cost?: number;
+  item_id?: string | null;
   created_at: string;
   // Joined properties
   account_name?: string;
@@ -46,7 +50,22 @@ export interface Transaction {
   category_name?: string;
   category_icon?: string;
   category_color?: string;
+  item_name?: string | null;
+  photo_count?: number;
+  first_photo_id?: string | null;
 }
+
+export interface AttachmentPhoto {
+  id: string;
+  transaction_id?: string;
+  item_id?: string;
+  mime_type: string;
+  data_url: string;
+  size_bytes?: number;
+  created_at?: string;
+}
+
+export type TransactionPhoto = AttachmentPhoto;
 
 export interface OverviewData {
   month: string;
@@ -74,6 +93,38 @@ export interface OverviewData {
     expense: number;
     income: number;
   }>;
+  daily_cost: {
+    total_daily_cost: number;
+    amortized_daily_cost: number;
+    variable_daily_cost: number;
+    item_daily_cost: number;
+    elapsed_days: number;
+    days_in_month: number;
+    month_start: string;
+    month_end: string;
+    variable_expense_total: number;
+    amortized_month_total: number;
+    excluded_expense_total: number;
+    active_item_count: number;
+    prev_total_daily_cost: number;
+    mom_diff: number;
+    mom_percent: number | null;
+    amortized_items: Array<{
+      id: string;
+      remark: string | null;
+      category_name?: string | null;
+      category_icon?: string | null;
+      category_color?: string | null;
+      total_amount: number;
+      amortize_days: number;
+      start_date: string;
+      end_date: string;
+      daily_amount: number;
+      overlap_days: number;
+      month_amount: number;
+      remaining_days: number;
+    }>;
+  };
 }
 
 export interface ItemExpense {
@@ -116,6 +167,8 @@ export interface ItemWithStats extends Item {
   cooling_left_days?: number;
   cooling_percent?: number;
   expenses?: ItemExpense[];
+  photo_count?: number;
+  first_photo_id?: string | null;
 }
 
 export interface ItemSummary {

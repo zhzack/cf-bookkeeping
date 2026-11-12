@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, PieChart, TrendingDown, TrendingUp, DollarSign } from 'lucide-react';
+import { ChevronLeft, ChevronRight, TrendingDown, TrendingUp } from 'lucide-react';
 import { fetchApi, formatCurrency } from '../api';
 import { OverviewData } from '../types';
 import { DynamicIcon } from '../components/DynamicIcon';
+import { DailyCostCard } from '../components/DailyCostCard';
+import { getLocalTodayStr } from '../utils/image';
 
 interface Props {
   refreshTrigger: number;
@@ -19,7 +21,10 @@ export const StatsView: React.FC<Props> = ({ refreshTrigger }) => {
   const loadOverview = async () => {
     setLoading(true);
     try {
-      const res = await fetchApi<OverviewData>(`/api/stats/overview?month=${currentMonth}`);
+      const localToday = getLocalTodayStr();
+      const res = await fetchApi<OverviewData>(
+        `/api/stats/overview?month=${currentMonth}&today=${localToday}`
+      );
       setData(res);
     } catch (err) {
       console.error(err);
@@ -83,6 +88,9 @@ export const StatsView: React.FC<Props> = ({ refreshTrigger }) => {
           <ChevronRight className="w-5 h-5" />
         </button>
       </div>
+
+      {/* 每日生活成本核心看板 */}
+      <DailyCostCard dailyCost={data.daily_cost} />
 
       {/* 当月收支柱状对比 */}
       <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm space-y-4">
