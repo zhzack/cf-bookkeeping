@@ -48,10 +48,13 @@ CREATE TABLE IF NOT EXISTS transactions (
     category_id TEXT, -- 支出/收入分类
     transaction_time TEXT NOT NULL, -- ISO字符串或 YYYY-MM-DD HH:mm:ss
     remark TEXT,
+    scene TEXT DEFAULT NULL, -- 消费场景标签（如：日常三餐、通勤出行、社交聚会、旅行出差等）
     amortize_days INTEGER DEFAULT NULL, -- 固定开销摊销天数（>1 时按天分摊到每日生活成本）
     amortize_start_date TEXT DEFAULT NULL, -- 摊销起始日期 (YYYY-MM-DD)
     exclude_daily_cost INTEGER DEFAULT 0, -- 是否排除出每日生活成本计算（如大件同步流水避免重复）
     item_id TEXT DEFAULT NULL, -- 关联的大件物品 ID（记账转大件/大件同步流水）
+    source TEXT DEFAULT 'manual', -- 来源: 'manual' | 'wechat' | 'alipay' | 'shortcut' | 'item'
+    external_id TEXT DEFAULT NULL, -- 外部账单单号/幂等去重键（如 wx:xxx / ali:xxx）
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -64,6 +67,23 @@ CREATE INDEX IF NOT EXISTS idx_trans_user_time ON transactions(user_id, transact
 CREATE INDEX IF NOT EXISTS idx_trans_account ON transactions(account_id);
 CREATE INDEX IF NOT EXISTS idx_trans_category ON transactions(category_id);
 CREATE INDEX IF NOT EXISTS idx_trans_item ON transactions(item_id);
+CREATE INDEX IF NOT EXISTS idx_trans_external ON transactions(user_id, external_id);
+CREATE INDEX IF NOT EXISTS idx_trans_user_scene ON transactions(user_id, scene);
+
+-- 个人长期 API Token 表（供 iOS 快捷指令等自动化工具使用）
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT 'iOS 快捷指令',
+    token_hash TEXT UNIQUE NOT NULL,
+    token_prefix TEXT NOT NULL,
+    last_used_at DATETIME DEFAULT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
 
 -- 交易流水照片表（压缩后的图片 Data URL，零额外对象存储依赖）
 CREATE TABLE IF NOT EXISTS transaction_photos (
@@ -133,4 +153,26 @@ CREATE TABLE IF NOT EXISTS item_photos (
 
 CREATE INDEX IF NOT EXISTS idx_item_photos_item ON item_photos(item_id);
 CREATE INDEX IF NOT EXISTS idx_item_photos_user ON item_photos(user_id);
+
+-- 自动分类与消费场景匹配规则表
+CREATE TABLE IF NOT EXISTS auto_rules (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    tx_type TEXT DEFAULT 'all', -- 'all' | 'expense' | 'income'
+    keywords TEXT NOT NULL, -- 逗号/顿号分隔关键词
+    match_mode TEXT DEFAULT 'contains', -- 'contains' | 'exact'
+    account_id TEXT DEFAULT NULL,
+    category_id TEXT DEFAULT NULL,
+    scene TEXT DEFAULT NULL,
+    priority INTEGER DEFAULT 100,
+    enabled INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_auto_rules_user ON auto_rules(user_id, enabled, priority DESC);
+
 
