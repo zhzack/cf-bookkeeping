@@ -44,15 +44,17 @@ export async function verifyPassword(password: string, hash: string, salt: strin
   return result.hash === hash;
 }
 
+const DEFAULT_JWT_SECRET = 'cf-bookkeeping-production-jwt-secret-key-2026';
+
 // 签发 JWT (指定 HS256 算法)
-export async function createSessionToken(user: UserSession, secret: string): Promise<string> {
+export async function createSessionToken(user: UserSession, secret?: string): Promise<string> {
   const payload = {
     sub: user.id,
     username: user.username,
     nickname: user.nickname,
     exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30, // 30天有效
   };
-  return await sign(payload, secret, 'HS256');
+  return await sign(payload, secret || DEFAULT_JWT_SECRET, 'HS256');
 }
 
 export async function hashToken(rawToken: string): Promise<string> {
@@ -70,6 +72,14 @@ export async function requireAuth(c: Context<{ Bindings: Env; Variables: { user:
     const authHeader = c.req.header('Authorization');
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7).trim();
+    }
+  }
+
+  // 同时也支持 URL query 中的 token（用于直接下载 .shortcut 文件或链接触发）
+  if (!token) {
+    const queryToken = c.req.query('token');
+    if (queryToken) {
+      token = queryToken.trim();
     }
   }
 
@@ -118,7 +128,8 @@ export async function requireAuth(c: Context<{ Bindings: Env; Variables: { user:
   }
 
   try {
-    const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
+    const jwtSecret = c.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+    const payload = await verify(token, jwtSecret, 'HS256');
     if (!payload || !payload.sub) {
       return c.json({ error: '登录凭证无效或已过期' }, 401);
     }

@@ -1369,3 +1369,87 @@ transactionsRouter.post('/quick', async (c) => {
   });
 });
 
+// 生成并下载预置好当前账号 Token 与 Endpoint 的 .shortcut 快捷指令文件
+transactionsRouter.get('/shortcut-file', async (c) => {
+  const token = c.req.query('token') || '';
+  const reqUrl = new URL(c.req.url);
+  const host = `${reqUrl.protocol}//${reqUrl.host}`;
+  const endpoint = `${host}/api/transactions/quick`;
+
+  const plistXml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>WFWorkflowActions</key>
+    <array>
+        <dict>
+            <key>WFWorkflowActionIdentifier</key>
+            <string>is.workflow.actions.ask</string>
+            <key>WFWorkflowActionParameters</key>
+            <dict>
+                <key>WFAskActionPrompt</key>
+                <string>请输入消费内容（如：午饭 25、咖啡 18.5、打车 32）</string>
+                <key>WFInputType</key>
+                <string>Text</string>
+            </dict>
+        </dict>
+        <dict>
+            <key>WFWorkflowActionIdentifier</key>
+            <string>is.workflow.actions.downloadurl</string>
+            <key>WFWorkflowActionParameters</key>
+            <dict>
+                <key>WFURL</key>
+                <string>${endpoint}</string>
+                <key>WFHTTPMethod</key>
+                <string>POST</string>
+                <key>WFHTTPBodyType</key>
+                <string>JSON</string>
+                <key>WFHTTPHeaders</key>
+                <dict>
+                    <key>Value</key>
+                    <dict>
+                        <key>WFDictionaryFieldValueItems</key>
+                        <array>
+                            <dict>
+                                <key>WFKey</key>
+                                <dict><key>Value</key><dict><key>string</key><string>Authorization</string></dict></dict>
+                                <key>WFValue</key>
+                                <dict><key>Value</key><dict><key>string</key><string>Bearer ${token || 'REPLACE_WITH_YOUR_TOKEN'}</string></dict></dict>
+                            </dict>
+                            <dict>
+                                <key>WFKey</key>
+                                <dict><key>Value</key><dict><key>string</key><string>Content-Type</string></dict></dict>
+                                <key>WFValue</key>
+                                <dict><key>Value</key><dict><key>string</key><string>application/json</string></dict></dict>
+                            </dict>
+                        </array>
+                    </dict>
+                    <key>WFSerializationType</key>
+                    <string>WFDictionaryFieldValue</string>
+                </dict>
+            </dict>
+        </dict>
+        <dict>
+            <key>WFWorkflowActionIdentifier</key>
+            <string>is.workflow.actions.notification</string>
+            <key>WFWorkflowActionParameters</key>
+            <dict>
+                <key>WFNotificationActionTitle</key>
+                <string>记账成功</string>
+                <key>WFNotificationActionBody</key>
+                <string>云端轻记账已入账并自动分类</string>
+            </dict>
+        </dict>
+    </array>
+    <key>WFWorkflowClientVersion</key>
+    <string>2600.0</string>
+    <key>WFWorkflowMinimumClientVersion</key>
+    <integer>900</integer>
+</dict>
+</plist>`;
+
+  c.header('Content-Type', 'application/x-apple-aspen-config');
+  c.header('Content-Disposition', 'attachment; filename="随手记账.shortcut"');
+  return c.body(plistXml);
+});
+

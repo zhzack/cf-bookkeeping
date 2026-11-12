@@ -17,5 +17,8 @@
 			"database_name": "cf_bookkeeping_db",
 			"database_id": "2e4890f8-4f49-4b78-9739-bcbac17dee9e"
 		}
-	]
+	],
+	"vars": {
+		"JWT_SECRET": "cf-bookkeeping-production-jwt-secret-key-2026"
+	}
 }

@@ -30,6 +30,7 @@ import { AccountModal } from './components/AccountModal';
 import { ItemModal } from './components/ItemModal';
 import { UserGuideModal } from './components/UserGuideModal';
 import { FeatureTipModal } from './components/FeatureTipModal';
+import { MobileShortcutPairModal } from './components/MobileShortcutPairModal';
 import { TransactionsView } from './views/TransactionsView';
 import { ItemsView } from './views/ItemsView';
 import { StatsView } from './views/StatsView';
@@ -62,6 +63,18 @@ export function App() {
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [guideSection, setGuideSection] = useState<GuideSectionId>('periodic-bills');
   const [activeFeatureTipKey, setActiveFeatureTipKey] = useState<FeatureTipKey | null>(null);
+
+  // 手机扫码快捷指令自动配对状态
+  const [mobilePairToken, setMobilePairToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('shortcut_pair') === '1' && params.get('token')) {
+        setMobilePairToken(params.get('token'));
+      }
+    }
+  }, []);
 
   // 1. 检查系统状态 (是否需要首次配置) 与用户登录状态
   const checkStatus = async () => {
@@ -565,6 +578,19 @@ export function App() {
 
       {/* 完整使用说明书 */}
       {userGuideModalNode}
+
+      {/* 手机扫码或一键跳转快捷指令极速配对弹窗 */}
+      <MobileShortcutPairModal
+        isOpen={Boolean(mobilePairToken)}
+        token={mobilePairToken || ''}
+        onClose={() => {
+          setMobilePairToken(null);
+          if (typeof window !== 'undefined' && window.history?.replaceState) {
+            const cleanUrl = window.location.pathname;
+            window.history.replaceState({}, '', cleanUrl);
+          }
+        }}
+      />
     </div>
   );
 }

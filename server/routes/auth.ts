@@ -231,6 +231,74 @@ authRouter.post('/tokens', requireAuth, async (c) => {
   });
 });
 
+// 快捷指令一键极简配对（自动生成长期令牌，附带配对参数与快捷指令链接，零配置）
+authRouter.post('/tokens/shortcut-pair', requireAuth, async (c) => {
+  const user = c.get('user');
+
+  // 如果已有过多令牌，清理最早创建的自动配对令牌，避免超出 10 个限制
+  const countRow = await c.env.DB.prepare(
+    'SELECT COUNT(*) as count FROM api_tokens WHERE user_id = ?'
+  )
+    .bind(user.id)
+    .first<{ count: number }>();
+
+  if ((countRow?.count || 0) >= 9) {
+    try {
+      await c.env.DB.prepare(
+        "DELETE FROM api_tokens WHERE user_id = ? AND name LIKE '%快捷配对%' ORDER BY created_at ASC LIMIT 2"
+      )
+        .bind(user.id)
+        .run();
+    } catch {
+      // 忽略清理失败
+    }
+  }
+
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  const rawHex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  const plainToken = `cbk_live_${rawHex}`;
+  const tokenHash = await hashToken(plainToken);
+  const tokenPrefix = `${plainToken.slice(0, 15)}...${plainToken.slice(-4)}`;
+  const id = 'tok_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  const name = 'iPhone 随手记账 (快捷配对)';
+
+  await c.env.DB.prepare(
+    'INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix) VALUES (?, ?, ?, ?, ?)'
+  )
+    .bind(id, user.id, name, tokenHash, tokenPrefix)
+    .run();
+
+  const reqUrl = new URL(c.req.url);
+  const host = `${reqUrl.protocol}//${reqUrl.host}`;
+  const endpoint = `${host}/api/transactions/quick`;
+  const shortcutName = '随手记账';
+  const pairCommand = `CONFIG|${host}|${plainToken}`;
+  const pairJson = JSON.stringify({
+    app: 'cf-bookkeeping',
+    host,
+    endpoint,
+    token: plainToken,
+    user: user.nickname || user.username,
+  });
+
+  const pairUrl = `shortcuts://run-shortcut?name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(pairCommand)}`;
+
+  return c.json({
+    id,
+    token: plainToken,
+    token_prefix: tokenPrefix,
+    host,
+    endpoint,
+    shortcut_name: shortcutName,
+    pair_command: pairCommand,
+    pair_json: pairJson,
+    pair_url: pairUrl,
+    icloud_url: 'https://www.icloud.com/shortcuts/2d0e7e1bb94247e8b6ee57a62df8bb5c',
+  });
+});
+
 // 撤销/删除 API Token
 authRouter.delete('/tokens/:id', requireAuth, async (c) => {
   const user = c.get('user');
