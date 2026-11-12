@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { X, Check, Package } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { X, Check, Package, Layers, Tags, Wand2 } from 'lucide-react';
 import { fetchApi } from '../api';
-import { Account, Category, Transaction, TransactionPhoto } from '../types';
+import { Account, AutoRule, Category, Transaction, TransactionPhoto } from '../types';
 import { DynamicIcon } from './DynamicIcon';
 import { PhotoPicker } from './PhotoPicker';
 import { ItemFieldsSection, ItemExtraValues } from './ItemFieldsSection';
+import { PRESET_SCENES } from './ScenePickerModal';
+import { CategoryManageModal } from './CategoryManageModal';
+import { RuleManageModal } from './RuleManageModal';
+import { matchAutoRules } from '../utils/ruleMatcher';
 
 interface Props {
   isOpen: boolean;
@@ -12,6 +16,7 @@ interface Props {
   onSuccess: () => void;
   accounts: Account[];
   categories: Category[];
+  onCategoriesChanged?: () => void;
   initialData?: Transaction | null;
   onConvertToItem?: (tx: Transaction) => void;
 }
@@ -22,6 +27,7 @@ export const TransactionModal: React.FC<Props> = ({
   onSuccess,
   accounts,
   categories,
+  onCategoriesChanged,
   initialData,
   onConvertToItem,
 }) => {
@@ -32,6 +38,7 @@ export const TransactionModal: React.FC<Props> = ({
   const [categoryId, setCategoryId] = useState('');
   const [time, setTime] = useState('');
   const [remark, setRemark] = useState('');
+  const [scene, setScene] = useState('');
   const [costMode, setCostMode] = useState<'daily' | 'amortize' | 'exclude' | 'item'>('daily');
   const [amortizeDays, setAmortizeDays] = useState('30');
   const [amortizeStartDate, setAmortizeStartDate] = useState('');
@@ -49,6 +56,35 @@ export const TransactionModal: React.FC<Props> = ({
   const [compressingPhotos, setCompressingPhotos] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [categorySyncScope, setCategorySyncScope] = useState<
+    'single' | 'remark' | 'category' | 'account_category'
+  >('single');
+  const [syncOnlyUncategorized, setSyncOnlyUncategorized] = useState(false);
+  const [syncPreview, setSyncPreview] = useState<{
+    total_count: number;
+    eligible_count: number;
+  } | null>(null);
+  const [syncPreviewLoading, setSyncPreviewLoading] = useState(false);
+  const [manageCatOpen, setManageCatOpen] = useState(false);
+  const [manageRuleOpen, setManageRuleOpen] = useState(false);
+  const [rules, setRules] = useState<AutoRule[]>([]);
+  const [localCategories, setLocalCategories] = useState<Category[]>(categories);
+
+  const loadRules = () => {
+    fetchApi<{ rules: AutoRule[] }>('/api/rules')
+      .then((res) => setRules(res.rules || []))
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    setLocalCategories(categories);
+  }, [categories]);
+
+  useEffect(() => {
+    if (isOpen) {
+      loadRules();
+    }
+  }, [isOpen]);
 
   // 初始化表单数据
   useEffect(() => {
@@ -73,6 +109,7 @@ export const TransactionModal: React.FC<Props> = ({
       setCategoryId(initialData.category_id || '');
       setTime(initialData.transaction_time.slice(0, 16));
       setRemark(initialData.remark || '');
+      setScene(initialData.scene || '');
       if (initialData.exclude_daily_cost) {
         setCostMode('exclude');
         setAmortizeDays('30');
@@ -101,6 +138,7 @@ export const TransactionModal: React.FC<Props> = ({
       setDestinationAccountId(accounts[1]?.id || '');
       setTime(localNow);
       setRemark('');
+      setScene('');
       setCostMode('daily');
       setAmortizeDays('30');
       setAmortizeStartDate(localNow.slice(0, 10));
@@ -108,21 +146,153 @@ export const TransactionModal: React.FC<Props> = ({
       const firstExp = categories.find((c) => c.type === 'expense');
       setCategoryId(firstExp?.id || '');
     }
+    setCategorySyncScope('single');
+    setSyncOnlyUncategorized(false);
+    setSyncPreview(null);
+    setSyncPreviewLoading(false);
     setError('');
   }, [isOpen, initialData, accounts, categories]);
+
+  const buildSyncCategoryPayload = (preview: boolean) => {
+    if (
+      !initialData ||
+      type === 'transfer' ||
+      type !== initialData.type ||
+      categorySyncScope === 'single'
+    ) {
+      return null;
+    }
+    const payload: Record<string, any> = {
+      scope: categorySyncScope,
+      type,
+      target_category_id: categoryId,
+      only_uncategorized: syncOnlyUncategorized,
+      preview,
+    };
+    if (categorySyncScope === 'remark') {
+      const exactRemark = initialData.remark?.trim() || '';
+      if (!exactRemark) return null;
+      payload.remark = exactRemark;
+    } else if (categorySyncScope === 'category') {
+      payload.category_id = initialData.category_id || '__uncategorized__';
+    } else if (categorySyncScope === 'account_category') {
+      payload.account_id = initialData.account_id;
+      payload.category_id = initialData.category_id || '__uncategorized__';
+    }
+    return payload;
+  };
+
+  useEffect(() => {
+    if (
+      !isOpen ||
+      !initialData ||
+      type === 'transfer' ||
+      type !== initialData.type ||
+      categorySyncScope === 'single' ||
+      !categoryId
+    ) {
+      setSyncPreview(null);
+      setSyncPreviewLoading(false);
+      return;
+    }
+
+    const payload = buildSyncCategoryPayload(true);
+    if (!payload) {
+      setSyncPreview(null);
+      return;
+    }
+
+    let cancelled = false;
+    setSyncPreviewLoading(true);
+    fetchApi<{ total_count: number; eligible_count: number }>('/api/transactions/batch-category', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
+      .then((res) => {
+        if (!cancelled) {
+          setSyncPreview({
+            total_count: res.total_count || 0,
+            eligible_count: res.eligible_count || 0,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSyncPreview(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSyncPreviewLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, initialData, type, categoryId, categorySyncScope, syncOnlyUncategorized]);
 
   // 当切换类型时，自动适配分类
   const handleTypeChange = (newType: 'expense' | 'income' | 'transfer') => {
     setType(newType);
+    if (newType !== initialData?.type) {
+      setCategorySyncScope('single');
+      setSyncPreview(null);
+    }
     if (newType !== 'transfer') {
       const matchCat = categories.find((c) => c.type === newType);
       setCategoryId(matchCat?.id || '');
     }
   };
 
+  const ruleSuggestion = useMemo(() => {
+    if (type === 'transfer' || !remark.trim() || rules.length === 0) return null;
+    const match = matchAutoRules(rules, {
+      type,
+      text: remark,
+      accountId,
+    });
+    const matchedCat = match.categoryId
+      ? localCategories.find((c) => c.id === match.categoryId && c.type === type)
+      : undefined;
+    const matchedScene = match.scene?.trim() || null;
+    if (!matchedCat && !matchedScene) return null;
+
+    const needsApply =
+      (matchedCat && matchedCat.id !== categoryId) ||
+      (matchedScene && matchedScene !== scene.trim());
+    const ruleName =
+      (matchedCat ? match.matchedCategoryRule?.name : undefined) ||
+      (matchedScene ? match.matchedSceneRule?.name : undefined) ||
+      '自定义规则';
+
+    return {
+      ruleName,
+      category: matchedCat || null,
+      scene: matchedScene,
+      needsApply,
+    };
+  }, [type, remark, rules, accountId, localCategories, categoryId, scene]);
+
   if (!isOpen) return null;
 
-  const filteredCategories = categories.filter((c) => c.type === type);
+  const filteredCategories = localCategories.filter((c) => c.type === type);
+
+  const handleCategoriesManaged = async (created?: Category) => {
+    if (created) {
+      setLocalCategories((prev) =>
+        prev.some((c) => c.id === created.id) ? prev : [...prev, created]
+      );
+      if (created.type === type) {
+        setCategoryId(created.id);
+      }
+    }
+    try {
+      const res = await fetchApi<{ categories: Category[] }>('/api/categories');
+      if (Array.isArray(res.categories)) {
+        setLocalCategories(res.categories);
+      }
+    } catch {
+      // ignore fallback refresh error
+    }
+    onCategoriesChanged?.();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,6 +352,7 @@ export const TransactionModal: React.FC<Props> = ({
         category_id: type !== 'transfer' ? categoryId : null,
         transaction_time: time.replace('T', ' ') + ':00',
         remark: remark.trim(),
+        scene: scene.trim().slice(0, 24) || null,
         amortize_days: type === 'expense' && costMode === 'amortize' ? parsedAmortizeDays : null,
         amortize_start_date: type === 'expense' && costMode === 'amortize' ? (amortizeStartDate || time.slice(0, 10)) : null,
         exclude_daily_cost: type === 'expense' && (costMode === 'exclude' || costMode === 'item') ? 1 : 0,
@@ -200,6 +371,14 @@ export const TransactionModal: React.FC<Props> = ({
                 }),
           }),
         });
+
+        const syncPayload = buildSyncCategoryPayload(false);
+        if (syncPayload && categoryId) {
+          await fetchApi('/api/transactions/batch-category', {
+            method: 'PATCH',
+            body: JSON.stringify(syncPayload),
+          });
+        }
       } else {
         await fetchApi('/api/transactions', {
           method: 'POST',
@@ -310,7 +489,17 @@ export const TransactionModal: React.FC<Props> = ({
           {/* Categories Grid (Expense & Income) */}
           {type !== 'transfer' && (
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-2">选择分类</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-semibold text-slate-500">选择分类</label>
+                <button
+                  type="button"
+                  onClick={() => setManageCatOpen(true)}
+                  className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 transition"
+                >
+                  <Tags className="w-3 h-3" />
+                  <span>管理 / 添加分类</span>
+                </button>
+              </div>
               <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 max-h-48 overflow-y-auto p-1">
                 {filteredCategories.map((cat) => {
                   const isSelected = categoryId === cat.id;
@@ -336,6 +525,101 @@ export const TransactionModal: React.FC<Props> = ({
                   );
                 })}
               </div>
+
+              {initialData && type === initialData.type && (
+                <div className="mt-3 p-3 rounded-2xl bg-indigo-50/70 border border-indigo-100 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-800">
+                      <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>同时将同类消费改为此分类</span>
+                    </div>
+                    {categorySyncScope !== 'single' && (
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-600 text-white">
+                        保存时同步同类
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setCategorySyncScope('single')}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-medium border transition ${
+                        categorySyncScope === 'single'
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      仅修改当前这一笔
+                    </button>
+
+                    {initialData.remark?.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => setCategorySyncScope('remark')}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-medium border transition ${
+                          categorySyncScope === 'remark'
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
+                        }`}
+                        title={initialData.remark.trim()}
+                      >
+                        同备注「
+                        {initialData.remark.trim().length > 10
+                          ? `${initialData.remark.trim().slice(0, 10)}…`
+                          : initialData.remark.trim()}
+                        」
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setCategorySyncScope('category')}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-medium border transition ${
+                        categorySyncScope === 'category'
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      同原分类（{initialData.category_name || '未分类'}）
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setCategorySyncScope('account_category')}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-medium border transition ${
+                        categorySyncScope === 'account_category'
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      同账户 + 同原分类
+                    </button>
+                  </div>
+
+                  {categorySyncScope !== 'single' && (
+                    <div className="pt-1 space-y-1.5">
+                      <label className="flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={syncOnlyUncategorized}
+                          onChange={(e) => setSyncOnlyUncategorized(e.target.checked)}
+                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span>仅应用到目前为「未分类」的记录</span>
+                      </label>
+
+                      <div className="text-[11px] text-indigo-700 font-medium">
+                        {syncPreviewLoading
+                          ? '正在统计匹配的同类消费笔数...'
+                          : syncPreview
+                          ? `共匹配 ${syncPreview.total_count} 笔同类${type === 'expense' ? '支出' : '收入'}，保存后将有 ${syncPreview.eligible_count} 笔统一归入「${filteredCategories.find((c) => c.id === categoryId)?.name || '目标分类'}」`
+                          : '保存时将同步修改匹配的同类记录分类'}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -425,6 +709,88 @@ export const TransactionModal: React.FC<Props> = ({
               />
             </div>
           </div>
+
+          {ruleSuggestion && (
+            <div className="px-3 py-2 rounded-2xl bg-indigo-50/75 border border-indigo-100 flex items-center justify-between flex-wrap gap-2 text-[11px]">
+              <div className="flex items-center gap-1.5 text-indigo-800 flex-wrap">
+                <Wand2 className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
+                <span>
+                  命中规则「<strong>{ruleSuggestion.ruleName}</strong>」：
+                  {ruleSuggestion.category ? `分类「${ruleSuggestion.category.name}」` : ''}
+                  {ruleSuggestion.category && ruleSuggestion.scene ? ' · ' : ''}
+                  {ruleSuggestion.scene ? `场景「${ruleSuggestion.scene}」` : ''}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {ruleSuggestion.needsApply ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (ruleSuggestion.category) setCategoryId(ruleSuggestion.category.id);
+                      if (ruleSuggestion.scene) setScene(ruleSuggestion.scene);
+                    }}
+                    className="px-2 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition"
+                  >
+                    一键应用
+                  </button>
+                ) : (
+                  <span className="text-emerald-600 font-semibold">已应用</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setManageRuleOpen(true)}
+                  className="px-2 py-0.5 rounded-lg bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 font-medium transition"
+                >
+                  管理规则
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 消费场景标签 */}
+          {type !== 'transfer' && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-semibold text-slate-500">消费场景（可选，方便按场景复盘）</label>
+                {scene && (
+                  <button
+                    type="button"
+                    onClick={() => setScene('')}
+                    className="text-[11px] text-slate-400 hover:text-rose-500 transition"
+                  >
+                    清除
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {PRESET_SCENES.slice(0, 8).map((preset) => {
+                  const active = scene.trim() === preset;
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setScene(active ? '' : preset)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition ${
+                        active
+                          ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-teal-400'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  );
+                })}
+              </div>
+              <input
+                type="text"
+                maxLength={24}
+                placeholder="也可自定义输入，例如：露营、加班打车、出差..."
+                value={scene}
+                onChange={(e) => setScene(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:outline-none"
+              />
+            </div>
+          )}
 
           {/* 每日生活成本分摊与大件标记 (仅支出) */}
           {type === 'expense' && (
@@ -573,11 +939,40 @@ export const TransactionModal: React.FC<Props> = ({
               className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-medium rounded-xl shadow-md shadow-indigo-200 flex items-center justify-center gap-2 transition disabled:opacity-60"
             >
               <Check className="w-5 h-5" />
-              <span>{loading ? '正在保存...' : initialData ? '保存修改' : costMode === 'item' ? '确认记账并录入大件' : '确认记账'}</span>
+              <span>
+                {loading
+                  ? '正在保存...'
+                  : initialData
+                  ? categorySyncScope !== 'single'
+                    ? '保存并同步同类分类'
+                    : '保存修改'
+                  : costMode === 'item'
+                  ? '确认记账并录入大件'
+                  : '确认记账'}
+              </span>
             </button>
           </div>
         </form>
       </div>
+
+      <CategoryManageModal
+        isOpen={manageCatOpen}
+        categories={localCategories}
+        defaultType={type === 'income' ? 'income' : 'expense'}
+        onClose={() => setManageCatOpen(false)}
+        onChanged={handleCategoriesManaged}
+      />
+
+      <RuleManageModal
+        isOpen={manageRuleOpen}
+        accounts={accounts}
+        categories={localCategories}
+        onClose={() => setManageRuleOpen(false)}
+        onChanged={() => {
+          loadRules();
+          onCategoriesChanged?.();
+        }}
+      />
     </div>
   );
 };

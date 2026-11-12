@@ -14,10 +14,13 @@ import { OverviewData } from '../types';
 
 interface Props {
   dailyCost: OverviewData['daily_cost'];
+  period?: 'week' | 'month' | 'year';
 }
 
-export const DailyCostCard: React.FC<Props> = ({ dailyCost: dc }) => {
+export const DailyCostCard: React.FC<Props> = ({ dailyCost: dc, period = 'month' }) => {
   const [showAmortizedDetails, setShowAmortizedDetails] = useState(false);
+  const unitName = period === 'week' ? '周' : period === 'year' ? '年' : '月';
+  const prevPrefix = period === 'week' ? '上周' : period === 'year' ? '上年' : '上月';
 
   const totalDc = dc.total_daily_cost || 0;
   const pct = (part: number) => (totalDc > 0 ? Math.round((part / totalDc) * 1000) / 10 : 0);
@@ -52,12 +55,12 @@ export const DailyCostCard: React.FC<Props> = ({ dailyCost: dc }) => {
               <TrendingUp className="w-3.5 h-3.5" />
             )}
             <span>
-              较上月 {formatCurrency(dc.mom_diff, true)} ({dc.mom_percent > 0 ? `+${dc.mom_percent}` : dc.mom_percent}%)
+              较{prevPrefix} {formatCurrency(dc.mom_diff, true)} ({dc.mom_percent > 0 ? `+${dc.mom_percent}` : dc.mom_percent}%)
             </span>
           </div>
         ) : (
           <span className="px-2.5 py-1 rounded-xl text-[11px] bg-slate-50 text-slate-400 border border-slate-100">
-            上月暂无对比数据
+            {prevPrefix}暂无对比数据
           </span>
         )}
       </div>
@@ -71,7 +74,7 @@ export const DailyCostCard: React.FC<Props> = ({ dailyCost: dc }) => {
         </div>
         {dc.prev_total_daily_cost > 0 && (
           <span className="text-[11px] text-slate-400">
-            上月日均 {formatCurrency(dc.prev_total_daily_cost)} / 天
+            {prevPrefix}日均 {formatCurrency(dc.prev_total_daily_cost)} / 天
           </span>
         )}
       </div>
@@ -118,7 +121,7 @@ export const DailyCostCard: React.FC<Props> = ({ dailyCost: dc }) => {
             <span className="text-[10px] font-normal text-slate-400"> /天</span>
           </div>
           <div className="text-[10px] text-slate-500 mt-0.5">
-            本月分摊 {formatCurrency(dc.amortized_month_total)} · {dc.amortized_items.length} 笔生效
+            本{unitName}分摊 {formatCurrency(dc.amortized_month_total)} · {dc.amortized_items.length} 笔生效
           </div>
         </div>
 
@@ -165,7 +168,7 @@ export const DailyCostCard: React.FC<Props> = ({ dailyCost: dc }) => {
             onClick={() => setShowAmortizedDetails((prev) => !prev)}
             className="w-full flex items-center justify-between text-xs font-semibold text-slate-600"
           >
-            <span>本月生效的固定摊销明细 ({dc.amortized_items.length})</span>
+            <span>本{unitName}生效的固定摊销明细 ({dc.amortized_items.length})</span>
             {showAmortizedDetails ? (
               <ChevronUp className="w-4 h-4 text-slate-400" />
             ) : (
