@@ -54,6 +54,10 @@ export interface Transaction {
   category_id?: string | null;
   transaction_time: string;
   remark?: string | null;
+  amortize_days?: number | null;
+  amortize_start_date?: string | null;
+  exclude_daily_cost?: number;
+  item_id?: string | null;
   created_at: string;
   // Joined fields
   account_name?: string;
@@ -61,7 +65,23 @@ export interface Transaction {
   category_name?: string;
   category_icon?: string;
   category_color?: string;
+  item_name?: string | null;
+  photo_count?: number;
+  first_photo_id?: string | null;
 }
+
+export interface PhotoRecord {
+  id: string;
+  transaction_id?: string;
+  item_id?: string;
+  user_id: string;
+  mime_type: string;
+  data_url: string;
+  size_bytes: number;
+  created_at: string;
+}
+
+export type TransactionPhoto = PhotoRecord;
 
 export interface ItemExpense {
   id: string;
@@ -103,5 +123,7 @@ export interface ItemWithStats extends Item {
   cooling_left_days?: number; // 心愿单冷静期剩余天数
   cooling_percent?: number; // 心愿单冷静进度
   expenses?: ItemExpense[];
+  photo_count?: number;
+  first_photo_id?: string | null;
 }
 

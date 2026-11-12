@@ -1,6 +1,14 @@
 import { Hono } from 'hono';
 import { Env, UserSession, Item, ItemWithStats, ItemExpense } from '../types';
 import { requireAuth } from '../auth';
+import {
+  validatePhotoDataUrls,
+  insertPhotos,
+  listPhotos,
+  syncPhotos,
+  deletePhotosByParent,
+  servePhotoBinary,
+} from '../photos';
 
 export const itemsRouter = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
 
@@ -13,6 +21,42 @@ function diffInDays(startDateStr: string, endDateStr: string): number {
   const days = Math.floor(diffTime / (1000 * 60 * 60 * 24));
   return Math.max(0, days);
 }
+
+// 同步写入账本流水时标记 exclude_daily_cost=1，避免与持物大件日均摊薄重复统计
+async function insertSyncedLedgerTx(
+  db: D1Database,
+  userId: string,
+  amount: number,
+  accountId: string,
+  dateStr: string,
+  remark: string,
+  itemId: string
+) {
+  const txId = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  await db.prepare(
+    `INSERT INTO transactions (id, user_id, type, amount, account_id, transaction_time, remark, exclude_daily_cost, item_id)
+     VALUES (?, ?, 'expense', ?, ?, ?, ?, 1, ?)`
+  ).bind(txId, userId, amount, accountId, `${dateStr} 12:00:00`, remark, itemId).run();
+}
+
+// 直接读取大件单张照片二进制
+itemsRouter.get('/photos/:photoId', async (c) => {
+  const user = c.get('user');
+  const photoId = c.req.param('photoId');
+  const res = await servePhotoBinary(c.env.DB, 'item_photos', photoId, user.id);
+  if (!res) {
+    return c.json({ error: '照片不存在' }, 404);
+  }
+  return res;
+});
+
+// 获取某个大件的全部照片
+itemsRouter.get('/:id/photos', async (c) => {
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const photos = await listPhotos(c.env.DB, 'item_photos', 'item_id', id, user.id);
+  return c.json({ photos });
+});
 
 // 获取大件物品列表及日均计算
 itemsRouter.get('/', async (c) => {
@@ -29,18 +73,31 @@ itemsRouter.get('/', async (c) => {
 
   sql += ' ORDER BY created_at DESC';
 
-  const { results: items } = await c.env.DB.prepare(sql).bind(...params).all<Item>();
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const [{ results: items }, { results: allExpenses }, { results: allPhotoMeta }] = await Promise.all([
+    c.env.DB.prepare(sql).bind(...params).all<Item>(),
+    c.env.DB.prepare('SELECT * FROM item_expenses WHERE user_id = ? ORDER BY date DESC')
+      .bind(user.id)
+      .all<ItemExpense>(),
+    c.env.DB.prepare('SELECT id, item_id FROM item_photos WHERE user_id = ? ORDER BY created_at ASC')
+      .bind(user.id)
+      .all<{ id: string; item_id: string }>(),
+  ]);
 
-  // 获取该用户所有物品的追加支出
-  const { results: allExpenses } = await c.env.DB.prepare(
-    'SELECT * FROM item_expenses WHERE user_id = ? ORDER BY date DESC'
-  ).bind(user.id).all<ItemExpense>();
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   const expensesByItem: Record<string, ItemExpense[]> = {};
   for (const exp of allExpenses) {
     if (!expensesByItem[exp.item_id]) expensesByItem[exp.item_id] = [];
     expensesByItem[exp.item_id].push(exp);
+  }
+
+  const photoMetaByItem: Record<string, { count: number; firstId: string | null }> = {};
+  for (const pm of allPhotoMeta) {
+    if (!photoMetaByItem[pm.item_id]) {
+      photoMetaByItem[pm.item_id] = { count: 1, firstId: pm.id };
+    } else {
+      photoMetaByItem[pm.item_id].count++;
+    }
   }
 
   let totalSpent = 0;
@@ -52,6 +109,7 @@ itemsRouter.get('/', async (c) => {
 
   const itemsWithStats: ItemWithStats[] = items.map((item) => {
     const itemExps = expensesByItem[item.id] || [];
+    const itemPhotoMeta = photoMetaByItem[item.id] || { count: 0, firstId: null };
     const additionalCost = itemExps.reduce((sum, e) => sum + e.amount, 0);
 
     if (item.status === 'using') usingCount++;
@@ -100,6 +158,8 @@ itemsRouter.get('/', async (c) => {
         cooling_left_days: coolingLeftDays,
         cooling_percent: coolingPercent,
         expenses: itemExps,
+        photo_count: itemPhotoMeta.count,
+        first_photo_id: itemPhotoMeta.firstId,
       };
     }
 
@@ -143,6 +203,8 @@ itemsRouter.get('/', async (c) => {
       warranty_days_left: warrantyDaysLeft,
       value_level: valueLevel,
       expenses: itemExps,
+      photo_count: itemPhotoMeta.count,
+      first_photo_id: itemPhotoMeta.firstId,
     };
   });
 
@@ -178,7 +240,8 @@ itemsRouter.post('/', async (c) => {
     cooling_days = 7,
     remark,
     sync_ledger = false,
-    account_id
+    account_id,
+    photos,
   } = body;
 
   if (!name || !name.trim()) {
@@ -190,6 +253,11 @@ itemsRouter.post('/', async (c) => {
   }
   if (!purchase_date) {
     return c.json({ error: '请选择购买日期或心愿添加日期' }, 400);
+  }
+
+  const photoCheck = validatePhotoDataUrls(photos);
+  if (photoCheck.error) {
+    return c.json({ error: photoCheck.error }, 400);
   }
 
   const id = 'itm_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
@@ -216,20 +284,21 @@ itemsRouter.post('/', async (c) => {
     remark?.trim() || null
   ).run();
 
+  if (photoCheck.items.length > 0) {
+    await insertPhotos(c.env.DB, 'item_photos', 'item_id', id, user.id, photoCheck.items);
+  }
+
   // 若选择同步记账流水
   if (sync_ledger && account_id && status === 'using') {
-    const txId = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-    await c.env.DB.prepare(
-      `INSERT INTO transactions (id, user_id, type, amount, account_id, transaction_time, remark)
-       VALUES (?, ?, 'expense', ?, ?, ?, ?)`
-    ).bind(
-      txId,
+    await insertSyncedLedgerTx(
+      c.env.DB,
       user.id,
       numPrice,
       account_id,
-      `${purchase_date} 12:00:00`,
-      `购买大件: ${name.trim()}`
-    ).run();
+      purchase_date,
+      `购买大件: ${name.trim()}`,
+      id
+    );
   }
 
   return c.json({ id, message: '录入成功' });
@@ -252,7 +321,9 @@ itemsRouter.put('/:id', async (c) => {
     warranty_date,
     location,
     cooling_days,
-    remark 
+    remark,
+    keep_photo_ids,
+    new_photos,
   } = body;
 
   if (!name || !name.trim()) {
@@ -262,6 +333,13 @@ itemsRouter.put('/:id', async (c) => {
   if (isNaN(numPrice) || numPrice <= 0) {
     return c.json({ error: '购买价格必须大于 0' }, 400);
   }
+
+  const newPhotoCheck = validatePhotoDataUrls(new_photos);
+  if (newPhotoCheck.error) {
+    return c.json({ error: newPhotoCheck.error }, 400);
+  }
+
+  const shouldSyncPhotos = Array.isArray(keep_photo_ids) || Array.isArray(new_photos);
 
   const numResale = Math.max(0, Math.round(Number(resale_price) || 0));
   const numExpected = expected_days ? Math.round(Number(expected_days)) : null;
@@ -289,6 +367,21 @@ itemsRouter.put('/:id', async (c) => {
 
   if (res.meta.changes === 0) {
     return c.json({ error: '未找到该物品或无权修改' }, 404);
+  }
+
+  if (shouldSyncPhotos) {
+    const syncRes = await syncPhotos(
+      c.env.DB,
+      'item_photos',
+      'item_id',
+      id,
+      user.id,
+      keep_photo_ids,
+      newPhotoCheck.items
+    );
+    if (syncRes.error) {
+      return c.json({ error: syncRes.error }, 400);
+    }
   }
 
   return c.json({ message: '物品更新成功' });
@@ -354,18 +447,15 @@ itemsRouter.post('/:id/convert-wishlist', async (c) => {
 
   // 若选择了付款账户，同步向记账账本写入一笔支出
   if (account_id) {
-    const txId = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-    await c.env.DB.prepare(
-      `INSERT INTO transactions (id, user_id, type, amount, account_id, transaction_time, remark)
-       VALUES (?, ?, 'expense', ?, ?, ?, ?)`
-    ).bind(
-      txId,
+    await insertSyncedLedgerTx(
+      c.env.DB,
       user.id,
       finalPrice,
       account_id,
-      `${finalDate} 12:00:00`,
-      `心愿单拔草购买: ${item.name}`
-    ).run();
+      finalDate,
+      `心愿单拔草购买: ${item.name}`,
+      id
+    );
   }
 
   return c.json({ message: '恭喜！已转为服役物品' });
@@ -395,18 +485,15 @@ itemsRouter.post('/:id/expenses', async (c) => {
 
   // 若勾选同步记账流水
   if (sync_ledger && account_id) {
-    const txId = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-    await c.env.DB.prepare(
-      `INSERT INTO transactions (id, user_id, type, amount, account_id, transaction_time, remark)
-       VALUES (?, ?, 'expense', ?, ?, ?, ?)`
-    ).bind(
-      txId,
+    await insertSyncedLedgerTx(
+      c.env.DB,
       user.id,
       numAmount,
       account_id,
-      `${expDate} 12:00:00`,
-      `大件追加支出: ${description.trim()}`
-    ).run();
+      expDate,
+      `大件追加支出: ${description.trim()}`,
+      itemId
+    );
   }
 
   return c.json({ id: expId, message: '追加费用成功' });
@@ -428,6 +515,11 @@ itemsRouter.delete('/:id/expenses/:expId', async (c) => {
 itemsRouter.delete('/:id', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
+
+  await Promise.all([
+    deletePhotosByParent(c.env.DB, 'item_photos', 'item_id', id, user.id),
+    c.env.DB.prepare('UPDATE transactions SET item_id = NULL WHERE item_id = ? AND user_id = ?').bind(id, user.id).run(),
+  ]);
 
   const res = await c.env.DB.prepare(
     'DELETE FROM items WHERE id = ? AND user_id = ?'
