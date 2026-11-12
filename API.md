@@ -110,17 +110,54 @@
     "category_id": "cat_xxxx", // 支出或收入时传入
     "destination_account_id": null, // 仅转账时传入
     "transaction_time": "2026-11-12 12:30:00",
-    "remark": "肯德基午餐"
+    "remark": "肯德基午餐",
+    "amortize_days": null, // 可选，>1 表示固定开销按天分摊（如 30/90/365）
+    "amortize_start_date": null, // 可选，摊销起始日 YYYY-MM-DD（默认记账日期）
+    "exclude_daily_cost": 0, // 可选，1 表示不计入每日生活成本
+    "photos": [], // 可选，最多 3 张压缩后的图片 Data URL (data:image/jpeg;base64,...)
+    "convert_to_item": false, // 可选，true 时（仅支出）同时写入持物大件并自动设置 exclude_daily_cost=1、绑定 item_id
+    "item_details": { // 可选，convert_to_item=true 时补充大件信息
+      "name": "MacBook Pro 14",
+      "category": "数码科技",
+      "expected_days": 1460,
+      "warranty_date": "2029-11-12",
+      "location": "书房工位",
+      "remark": "深空黑 512G"
+    }
   }
   ```
 
 #### 2.3 修改流水
 - **接口**：`PUT /api/transactions/:id`
 - **需鉴权**
+- 支持可选 `keep_photo_ids`（保留的旧照片 ID 数组）与 `new_photos`（新增图片 Data URL 数组）
 
 #### 2.4 删除流水
 - **接口**：`DELETE /api/transactions/:id`
 - **需鉴权**
+
+#### 2.5 查询流水照片 / 获取照片原图
+- **接口**：`GET /api/transactions/:id/photos`（返回 JSON 照片列表）
+- **接口**：`GET /api/transactions/photos/:photoId`（返回图片二进制流）
+- **需鉴权**
+
+#### 2.6 将已有支出流水设为持物大件
+- **接口**：`POST /api/transactions/:id/convert-to-item`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "name": "索尼降噪耳机", // 必填
+    "category": "数码科技", // 必填
+    "expected_days": 1095, // 可选
+    "warranty_date": "2028-11-12", // 可选
+    "location": "随身通勤包", // 可选
+    "remark": "双十一满减购入", // 可选
+    "copy_photo_ids": ["pho_xxxx"], // 可选，从原账单照片复制到该大件
+    "new_photos": [] // 可选，补充上传的 Data URL 图片（合计最多 3 张）
+  }
+  ```
+- **说明**：自动创建 `items` 记录、绑定 `transactions.item_id`，并将 `exclude_daily_cost` 设为 `1`，避免与持物大件日均成本重复统计。
 
 ---
 
@@ -213,9 +250,16 @@
     "expected_days": 1095, // 预期使用 3 年
     "warranty_date": "2029-11-12", // 质保期
     "location": "书房",
-    "cooling_days": 7 // 若为心愿单，设定冷静期天数
+    "cooling_days": 7, // 若为心愿单，设定冷静期天数
+    "photos": [] // 可选，最多 3 张压缩后的图片 Data URL
   }
   ```
+
+#### 5.2.1 修改大件与大件照片接口
+- **修改大件**：`PUT /api/items/:id`（支持可选 `keep_photo_ids` 与 `new_photos` 同步更新照片）
+- **查询大件照片**：`GET /api/items/:id/photos`（返回 JSON 照片列表）
+- **获取大件照片原图**：`GET /api/items/photos/:photoId`（返回图片二进制流）
+- **需鉴权**
 
 #### 5.3 为大件追加配件/维护支出
 - **接口**：`POST /api/items/:id/expenses`
@@ -250,7 +294,9 @@
 #### 6.1 获取当月财务概览与报表
 - **接口**：`GET /api/stats/overview`
 - **需鉴权**
-- **Query 参数**：`month` (可选，默认当月，如 `2026-11`)
+- **Query 参数**：
+  - `month` (可选，默认当月，如 `2026-11`)
+  - `today` (可选，本地当前日期 `YYYY-MM-DD`，用于计算当月已过天数)
 - **返回示例**：
   ```json
   {
@@ -279,6 +325,24 @@
         "expense": 3500,
         "income": 0
       }
-    ]
+    ],
+    "daily_cost": {
+      "total_daily_cost": 18500,
+      "amortized_daily_cost": 10000,
+      "variable_daily_cost": 5500,
+      "item_daily_cost": 3000,
+      "elapsed_days": 12,
+      "days_in_month": 30,
+      "month_start": "2026-11-01",
+      "month_end": "2026-11-12",
+      "variable_expense_total": 66000,
+      "amortized_month_total": 120000,
+      "excluded_expense_total": 0,
+      "active_item_count": 3,
+      "prev_total_daily_cost": 19200,
+      "mom_diff": -700,
+      "mom_percent": -3.6,
+      "amortized_items": []
+    }
   }
   ```
