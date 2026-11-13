@@ -20,5 +20,11 @@
 	],
 	"vars": {
 		"JWT_SECRET": "cf-bookkeeping-production-jwt-secret-key-2026"
-	}
+	},
+	"routes": [
+		{
+			"pattern": "book.b1uegrey.xyz",
+			"custom_domain": true
+		}
+	]
 }
