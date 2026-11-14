@@ -156,6 +156,7 @@ const TX_LIST_JOINS = `
   LEFT JOIN categories c ON t.category_id = c.id
   LEFT JOIN items i ON t.item_id = i.id
   LEFT JOIN prepaid_cards pc ON t.card_id = pc.id
+  LEFT JOIN subscriptions s ON t.subscription_id = s.id
 `;
 
 function buildTransactionFilterClause(userId: string, filter: TxFilterInput) {
@@ -219,9 +220,10 @@ function buildTransactionFilterClause(userId: string, filter: TxFilterInput) {
       OR COALESCE(da.name, '') LIKE ? ESCAPE '\\'
       OR COALESCE(i.name, '') LIKE ? ESCAPE '\\'
       OR COALESCE(pc.name, '') LIKE ? ESCAPE '\\'
+      OR COALESCE(s.name, '') LIKE ? ESCAPE '\\'
       OR printf('%.2f', t.amount / 100.0) LIKE ? ESCAPE '\\'
     )`;
-    params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
+    params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern);
   }
 
   return { whereClause, params };
@@ -632,6 +634,7 @@ transactionsRouter.get('/', async (c) => {
       COALESCE(t.exclude_daily_cost, 0) AS exclude_daily_cost,
       t.item_id,
       t.card_id,
+      t.subscription_id,
       t.source,
       t.external_id,
       t.created_at,
@@ -642,6 +645,7 @@ transactionsRouter.get('/', async (c) => {
       c.color AS category_color,
       i.name AS item_name,
       pc.name AS card_name,
+      s.name AS subscription_name,
       (SELECT COUNT(*) FROM transaction_photos p WHERE p.transaction_id = t.id) AS photo_count,
       (SELECT p.id FROM transaction_photos p WHERE p.transaction_id = t.id ORDER BY p.created_at ASC LIMIT 1) AS first_photo_id
     ${TX_LIST_JOINS}
@@ -715,6 +719,7 @@ transactionsRouter.post('/', async (c) => {
     amortize_start_date,
     exclude_daily_cost,
     card_id,
+    subscription_id,
     photos,
     convert_to_item,
     item_details,
@@ -793,10 +798,11 @@ transactionsRouter.post('/', async (c) => {
   }
 
   const resolvedCardId = typeof card_id === 'string' && card_id.trim() ? card_id.trim() : null;
+  const resolvedSubId = typeof subscription_id === 'string' && subscription_id.trim() ? subscription_id.trim() : null;
 
   await c.env.DB.prepare(
-    `INSERT INTO transactions (id, user_id, type, amount, account_id, destination_account_id, category_id, transaction_time, remark, scene, amortize_days, amortize_start_date, exclude_daily_cost, item_id, card_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO transactions (id, user_id, type, amount, account_id, destination_account_id, category_id, transaction_time, remark, scene, amortize_days, amortize_start_date, exclude_daily_cost, item_id, card_id, subscription_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id,
     user.id,
@@ -812,7 +818,8 @@ transactionsRouter.post('/', async (c) => {
     dailyCost.amortizeStartDate,
     dailyCost.excludeDailyCost,
     createdItemId,
-    resolvedCardId
+    resolvedCardId,
+    resolvedSubId
   ).run();
 
   if (photoCheck.items.length > 0) {

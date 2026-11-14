@@ -538,3 +538,101 @@
 - **需鉴权**
 - **请求体**：`{ "target_value": 15, "remark": "商家额外赠送1次" }`
 
+---
+
+### 9. 周期记账与订阅管理接口 (Subscriptions)
+
+针对 iCloud、Apple Music、Netflix、宽带、房租水电、健身房月缴等周期性固定支出管理与自动化记账。系统支持 Cloudflare Workers Cron Trigger 后台定时处理与前端 API 访问时无感自愈入账。
+
+#### 9.1 获取订阅列表与汇总大盘
+- **接口**：`GET /api/subscriptions`
+- **需鉴权**
+- **Query 参数**：`status` (`all` | `active` | `paused` | `cancelled`，默认 `all`)
+- **说明**：请求时会自动触发当前用户到期订阅的自愈检查与自动入账。
+- **返回示例**：
+  ```json
+  {
+    "subscriptions": [
+      {
+        "id": "sub_xxxx",
+        "name": "iCloud+ 2TB",
+        "category_id": "cat_digital",
+        "category_name": "数码数科",
+        "account_id": "acc_alipay",
+        "account_name": "支付宝",
+        "amount": 6800, // 分，68.00 元
+        "currency": "CNY",
+        "period_type": "monthly", // 'monthly' | 'yearly' | 'weekly' | 'quarterly'
+        "period_interval": 1,
+        "billing_day": 15,
+        "first_billing_date": "2026-01-15",
+        "next_billing_date": "2026-12-15",
+        "auto_record": 1, // 1: 自动入账, 0: 手动确认
+        "status": "active", // 'active' | 'paused' | 'cancelled'
+        "icon": "Smartphone",
+        "color": "#3b82f6",
+        "remark": "家庭共享套餐",
+        "monthly_equivalent_amount": 6800, // 折合月费 (分)
+        "yearly_equivalent_amount": 81600, // 折合年费 (分)
+        "days_until_billing": 30, // 距扣款天数 (0=今天, <0=逾期未确认)
+        "billing_status": "future", // 'today' | 'upcoming' | 'overdue' | 'future'
+        "is_pending_confirmation": false
+      }
+    ],
+    "summary": {
+      "total_active_count": 6,
+      "monthly_total_cost": 32800, // 每月固定支出折算 328.00 元
+      "yearly_total_cost": 393600, // 每年固定支出 3936.00 元
+      "upcoming_7_days_count": 1,
+      "pending_confirmation_count": 0
+    }
+  }
+  ```
+
+#### 9.2 创建订阅
+- **接口**：`POST /api/subscriptions`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "name": "ChatGPT Plus",
+    "amount": 14500, // 分，145.00 元
+    "period_type": "monthly",
+    "period_interval": 1,
+    "first_billing_date": "2026-11-15",
+    "account_id": "acc_visa",
+    "category_id": "cat_soft",
+    "auto_record": true, // 是否由系统自动扣款记账
+    "record_first_bill_now": true, // 是否立即将首期记录到账本流水中
+    "icon": "Zap",
+    "color": "#10b981",
+    "remark": "生产力必备"
+  }
+  ```
+
+#### 9.3 获取单个订阅详情与历史流水
+- **接口**：`GET /api/subscriptions/:id`
+- **需鉴权**
+- **返回**：包含订阅基础信息、折合统计指标以及历史上所有由此订阅生成的扣款交易流水（`history: Transaction[]`）。
+
+#### 9.4 修改订阅设置
+- **接口**：`PUT /api/subscriptions/:id`
+- **需鉴权**
+- **请求体**：支持修改 `name`, `amount`, `period_type`, `period_interval`, `next_billing_date`, `auto_record`, `account_id`, `category_id`, `color`, `icon`, `remark`, `status`。
+
+#### 9.5 删除订阅
+- **接口**：`DELETE /api/subscriptions/:id`
+- **需鉴权**
+- **说明**：删除订阅本体，历史已入账流水保留并将 `subscription_id` 置空。
+
+#### 9.6 立即入账一期 (Bill Now)
+- **接口**：`POST /api/subscriptions/:id/bill-now`
+- **需鉴权**
+- **说明**：手动确认模式下点击或临时提前扣款。系统将生成一笔关联到该订阅的支出流水，扣除对应账户余额，并自动将 `next_billing_date` 滚动到下一周期。
+
+#### 9.7 暂停 / 恢复订阅 (Toggle Pause)
+- **接口**：`POST /api/subscriptions/:id/toggle-pause`
+- **需鉴权**
+- **说明**：一键切换订阅的 `active` / `paused` 状态。
+
+

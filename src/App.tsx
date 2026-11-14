@@ -3,6 +3,7 @@ import {
   ReceiptText, 
   Package,
   CreditCard,
+  Calendar,
   PieChart, 
   Wallet, 
   Settings as SettingsIcon, 
@@ -11,7 +12,7 @@ import {
   BookOpen
 } from 'lucide-react';
 import { fetchApi } from './api';
-import { User, Account, Category, Transaction, ItemWithStats, PrepaidCardWithStats } from './types';
+import { User, Account, Category, Transaction, ItemWithStats, PrepaidCardWithStats, SubscriptionWithStats } from './types';
 import {
   FEATURE_TIPS,
   FeatureTipKey,
@@ -32,6 +33,8 @@ import { CardConsumeModal } from './components/CardConsumeModal';
 import { CardRechargeModal } from './components/CardRechargeModal';
 import { CardAdjustModal } from './components/CardAdjustModal';
 import { CardDetailModal } from './components/CardDetailModal';
+import { SubscriptionModal } from './components/SubscriptionModal';
+import { SubscriptionDetailModal } from './components/SubscriptionDetailModal';
 import { BillImportModal } from './components/BillImportModal';
 import { AccountModal } from './components/AccountModal';
 import { ItemModal } from './components/ItemModal';
@@ -41,6 +44,7 @@ import { MobileShortcutPairModal } from './components/MobileShortcutPairModal';
 import { TransactionsView } from './views/TransactionsView';
 import { ItemsView } from './views/ItemsView';
 import { CardsView } from './views/CardsView';
+import { SubscriptionsView } from './views/SubscriptionsView';
 import { StatsView } from './views/StatsView';
 import { AccountsView } from './views/AccountsView';
 import { SettingsView } from './views/SettingsView';
@@ -50,7 +54,7 @@ export function App() {
   const [needSetup, setNeedSetup] = useState(false);
   const [user, setUser] = useState<User | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'transactions' | 'items' | 'cards' | 'stats' | 'accounts' | 'settings'>('transactions');
+  const [activeTab, setActiveTab] = useState<'transactions' | 'items' | 'cards' | 'subscriptions' | 'stats' | 'accounts' | 'settings'>('transactions');
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -77,6 +81,11 @@ export function App() {
   const [isCardAdjustOpen, setIsCardAdjustOpen] = useState(false);
   const [adjustingCard, setAdjustingCard] = useState<PrepaidCardWithStats | null>(null);
   const [detailCardId, setDetailCardId] = useState<string | null>(null);
+
+  // 周期订阅相关弹窗状态
+  const [isSubModalOpen, setIsSubModalOpen] = useState(false);
+  const [editingSub, setEditingSub] = useState<SubscriptionWithStats | null>(null);
+  const [detailSubId, setDetailSubId] = useState<string | null>(null);
 
   // 使用说明 & 首次功能引导状态
   const [guidePrefs, setGuidePrefs] = useState<GuidePreferences>(() => loadGuidePrefs(null));
@@ -200,6 +209,15 @@ export function App() {
     }
   };
 
+  const handleDeleteSub = async (subId: string) => {
+    try {
+      await fetchApi(`/api/subscriptions/${subId}`, { method: 'DELETE' });
+      triggerRefresh();
+    } catch (err: any) {
+      alert(err.message || '删除失败');
+    }
+  };
+
   const userGuideModalNode = (
     <UserGuideModal
       isOpen={isGuideOpen}
@@ -305,6 +323,14 @@ export function App() {
               卡包
             </button>
             <button
+              onClick={() => setActiveTab('subscriptions')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
+                activeTab === 'subscriptions' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              订阅
+            </button>
+            <button
               onClick={() => setActiveTab('stats')}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
                 activeTab === 'stats' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:text-slate-900'
@@ -364,7 +390,7 @@ export function App() {
         </div>
         <div className="flex items-center gap-2.5">
           <span className="text-xs font-semibold text-slate-400">
-            {activeTab === 'transactions' ? '流水明细' : activeTab === 'items' ? '大件日均' : activeTab === 'cards' ? '会员卡包' : activeTab === 'stats' ? '财务统计' : activeTab === 'accounts' ? '账户管理' : '个人设置'}
+            {activeTab === 'transactions' ? '流水明细' : activeTab === 'items' ? '大件日均' : activeTab === 'cards' ? '会员卡包' : activeTab === 'subscriptions' ? '周期订阅' : activeTab === 'stats' ? '财务统计' : activeTab === 'accounts' ? '账户管理' : '个人设置'}
           </span>
           <button
             type="button"
@@ -443,6 +469,26 @@ export function App() {
           />
         )}
 
+        {activeTab === 'subscriptions' && (
+          <SubscriptionsView
+            accounts={accounts}
+            categories={categories}
+            onOpenAddSub={() => {
+              setEditingSub(null);
+              setIsSubModalOpen(true);
+            }}
+            onOpenDetail={(subId) => {
+              setDetailSubId(subId);
+            }}
+            onEditSub={(sub) => {
+              setEditingSub(sub);
+              setIsSubModalOpen(true);
+            }}
+            refreshTrigger={refreshTrigger}
+            onRefreshParent={triggerRefresh}
+          />
+        )}
+
         {activeTab === 'stats' && (
           <StatsView
             refreshTrigger={refreshTrigger}
@@ -488,15 +534,15 @@ export function App() {
       </main>
 
       {/* 移动端底部 Tab 导航栏 */}
-      <div className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-lg border-t border-slate-100 px-2 py-1.5 flex items-center justify-around shadow-lg">
+      <div className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-lg border-t border-slate-100 px-1 py-1.5 flex items-center justify-around shadow-lg">
         <button
           onClick={() => setActiveTab('transactions')}
           className={`flex flex-col items-center gap-0.5 p-1 transition ${
             activeTab === 'transactions' ? 'text-indigo-600 font-bold' : 'text-slate-400'
           }`}
         >
-          <ReceiptText className="w-5 h-5" />
-          <span className="text-[10px]">明细</span>
+          <ReceiptText className="w-4 h-4" />
+          <span className="text-[9px]">明细</span>
         </button>
 
         <button
@@ -505,8 +551,8 @@ export function App() {
             activeTab === 'items' ? 'text-indigo-600 font-bold' : 'text-slate-400'
           }`}
         >
-          <Package className="w-5 h-5" />
-          <span className="text-[10px]">大件</span>
+          <Package className="w-4 h-4" />
+          <span className="text-[9px]">大件</span>
         </button>
 
         <button
@@ -515,12 +561,22 @@ export function App() {
             activeTab === 'cards' ? 'text-indigo-600 font-bold' : 'text-slate-400'
           }`}
         >
-          <CreditCard className="w-5 h-5" />
-          <span className="text-[10px]">卡包</span>
+          <CreditCard className="w-4 h-4" />
+          <span className="text-[9px]">卡包</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('subscriptions')}
+          className={`flex flex-col items-center gap-0.5 p-1 transition ${
+            activeTab === 'subscriptions' ? 'text-indigo-600 font-bold' : 'text-slate-400'
+          }`}
+        >
+          <Calendar className="w-4 h-4" />
+          <span className="text-[9px]">订阅</span>
         </button>
 
         {/* 居中记账按钮 */}
-        <div className="relative -top-4">
+        <div className="relative -top-3">
           <button
             onClick={() => {
               if (activeTab === 'items') {
@@ -529,14 +585,17 @@ export function App() {
               } else if (activeTab === 'cards') {
                 setEditingCard(null);
                 setIsCardModalOpen(true);
+              } else if (activeTab === 'subscriptions') {
+                setEditingSub(null);
+                setIsSubModalOpen(true);
               } else {
                 setEditingTx(null);
                 setIsTxModalOpen(true);
               }
             }}
-            className="w-12 h-12 p-3 bg-gradient-to-tr from-indigo-600 to-indigo-500 active:scale-90 text-white rounded-full shadow-lg shadow-indigo-300 flex items-center justify-center transition"
+            className="w-11 h-11 p-2.5 bg-gradient-to-tr from-indigo-600 to-indigo-500 active:scale-90 text-white rounded-full shadow-lg shadow-indigo-300 flex items-center justify-center transition"
           >
-            <Plus className="w-6 h-6 stroke-[2.5]" />
+            <Plus className="w-5 h-5 stroke-[2.5]" />
           </button>
         </div>
 
@@ -546,8 +605,8 @@ export function App() {
             activeTab === 'stats' ? 'text-indigo-600 font-bold' : 'text-slate-400'
           }`}
         >
-          <PieChart className="w-5 h-5" />
-          <span className="text-[10px]">统计</span>
+          <PieChart className="w-4 h-4" />
+          <span className="text-[9px]">统计</span>
         </button>
 
         <button
@@ -556,8 +615,8 @@ export function App() {
             activeTab === 'accounts' ? 'text-indigo-600 font-bold' : 'text-slate-400'
           }`}
         >
-          <Wallet className="w-5 h-5" />
-          <span className="text-[10px]">账户</span>
+          <Wallet className="w-4 h-4" />
+          <span className="text-[9px]">账户</span>
         </button>
 
         <button
@@ -566,8 +625,8 @@ export function App() {
             activeTab === 'settings' ? 'text-indigo-600 font-bold' : 'text-slate-400'
           }`}
         >
-          <SettingsIcon className="w-5 h-5" />
-          <span className="text-[10px]">设置</span>
+          <SettingsIcon className="w-4 h-4" />
+          <span className="text-[9px]">设置</span>
         </button>
       </div>
 
@@ -675,6 +734,32 @@ export function App() {
           setIsCardModalOpen(true);
         }}
         onDelete={handleDeleteCard}
+      />
+
+      {/* 周期订阅弹窗 (新增 / 编辑) */}
+      <SubscriptionModal
+        isOpen={isSubModalOpen}
+        onClose={() => {
+          setIsSubModalOpen(false);
+          setEditingSub(null);
+        }}
+        onSuccess={triggerRefresh}
+        subscriptionToEdit={editingSub}
+        accounts={accounts}
+        categories={categories}
+      />
+
+      {/* 订阅详情与历史扣款弹窗 */}
+      <SubscriptionDetailModal
+        isOpen={Boolean(detailSubId)}
+        subscriptionId={detailSubId}
+        onClose={() => setDetailSubId(null)}
+        onEdit={(sub) => {
+          setEditingSub(sub);
+          setIsSubModalOpen(true);
+        }}
+        onDelete={handleDeleteSub}
+        onRefreshParent={triggerRefresh}
       />
 
       {/* 将已有开销转为持物大件弹窗 */}

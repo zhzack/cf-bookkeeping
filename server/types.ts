@@ -60,6 +60,7 @@ export interface Transaction {
   exclude_daily_cost?: number;
   item_id?: string | null;
   card_id?: string | null;
+  subscription_id?: string | null;
   source?: string | null;
   external_id?: string | null;
   created_at: string;
@@ -71,6 +72,7 @@ export interface Transaction {
   category_color?: string;
   item_name?: string | null;
   card_name?: string | null;
+  subscription_name?: string | null;
   photo_count?: number;
   first_photo_id?: string | null;
 }
@@ -179,5 +181,49 @@ export interface PrepaidCardLog {
   // Optional joined fields
   account_name?: string | null;
 }
+
+export interface Subscription {
+  id: string;
+  user_id: string;
+  name: string;
+  category_id?: string | null;
+  account_id?: string | null;
+  amount: number;               // 分，每期扣费金额
+  currency: string;
+  period_type: 'monthly' | 'yearly' | 'weekly' | 'quarterly';
+  period_interval: number;
+  billing_day: number;
+  first_billing_date: string;
+  next_billing_date: string;
+  auto_record: number;          // 1: 自动入账, 0: 手动确认
+  status: 'active' | 'paused' | 'cancelled';
+  icon?: string | null;
+  color?: string | null;
+  remark?: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined fields
+  category_name?: string;
+  category_icon?: string;
+  category_color?: string;
+  account_name?: string;
+}
+
+export interface SubscriptionWithStats extends Subscription {
+  monthly_equivalent_amount: number; // 分/月，折合月度固定支出
+  yearly_equivalent_amount: number;  // 分/年，折合年度固定支出
+  days_until_billing: number;        // 距下次预计扣款天数 (0 为今天, <0 为逾期未确认)
+  billing_status: 'today' | 'upcoming' | 'overdue' | 'future';
+  is_pending_confirmation: boolean;
+}
+
+export interface SubscriptionsSummary {
+  total_active_count: number;
+  monthly_total_cost: number;       // 全部在役订阅折合每月总支出 (分)
+  yearly_total_cost: number;        // 全部在役订阅折合每年总支出 (分)
+  upcoming_7_days_count: number;
+  pending_confirmation_count: number;
+}
+
 
 

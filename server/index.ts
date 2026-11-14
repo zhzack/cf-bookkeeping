@@ -10,6 +10,7 @@ import { itemsRouter } from './routes/items';
 import { rulesRouter } from './routes/rules';
 import { shortcutsRouter } from './routes/shortcuts';
 import { cardsRouter } from './routes/cards';
+import { subscriptionsRouter, processDueSubscriptions } from './routes/subscriptions';
 
 const app = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
 
@@ -38,6 +39,7 @@ api.route('/rules', rulesRouter);
 api.route('/shortcuts', shortcutsRouter);
 api.route('/v1/shortcuts', shortcutsRouter);
 api.route('/cards', cardsRouter);
+api.route('/subscriptions', subscriptionsRouter);
 
 // 挂载所有 /api 路由
 app.route('/api', api);
@@ -62,5 +64,15 @@ app.get('*', async (c) => {
   return c.text('Cloudflare Bookkeeping Backend is running. Frontend static assets binding not found.', 404);
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(controller: any, env: Env, ctx: any) {
+    const task = processDueSubscriptions(env.DB);
+    if (ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(task);
+    } else {
+      await task;
+    }
+  },
+};
 

@@ -21,6 +21,11 @@
 	"vars": {
 		"JWT_SECRET": "cf-bookkeeping-production-jwt-secret-key-2026"
 	},
+	"triggers": {
+		"crons": [
+			"0 1 * * *"
+		]
+	},
 	"routes": [
 		{
 			"pattern": "book.b1uegrey.xyz",
