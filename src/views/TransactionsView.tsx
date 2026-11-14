@@ -14,6 +14,7 @@ import {
   CheckSquare,
   FolderKanban,
   Wand2,
+  Sparkles,
 } from 'lucide-react';
 import { fetchApi, formatCurrency } from '../api';
 import { Account, Category, OverviewData, Transaction, TransactionPhoto } from '../types';
@@ -32,6 +33,7 @@ import { getLocalTodayStr } from '../utils/image';
 
 interface Props {
   onOpenAddModal: () => void;
+  onOpenAiRecord?: () => void;
   onEditTransaction: (tx: Transaction) => void;
   onConvertToItem?: (tx: Transaction) => void;
   onConvertToCard?: (tx: Transaction) => void;
@@ -44,6 +46,7 @@ interface Props {
 
 export const TransactionsView: React.FC<Props> = ({
   onOpenAddModal,
+  onOpenAiRecord,
   onEditTransaction,
   onConvertToItem,
   onConvertToCard,
@@ -469,6 +472,18 @@ export const TransactionsView: React.FC<Props> = ({
               <Wand2 className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">规则</span>
             </button>
+
+            {onOpenAiRecord && (
+              <button
+                type="button"
+                onClick={onOpenAiRecord}
+                className="px-2.5 py-2 rounded-xl text-xs font-bold border bg-gradient-to-r from-violet-50 to-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-300 flex items-center gap-1 whitespace-nowrap transition shadow-sm"
+                title="一句话输入或拍照小票记账"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                <span className="hidden sm:inline">AI 记账</span>
+              </button>
+            )}
           </div>
 
           {selectionMode && (

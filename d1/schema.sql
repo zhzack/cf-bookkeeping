@@ -271,6 +271,23 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 CREATE INDEX IF NOT EXISTS idx_sub_user ON subscriptions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_sub_next_billing ON subscriptions(status, auto_record, next_billing_date);
 
+-- 用户 AI 大模型与小票识别配置表 (支持 Workers AI 与自定义 DeepSeek / OpenAI 等)
+CREATE TABLE IF NOT EXISTS user_ai_configs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT UNIQUE NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'workers_ai', -- 'workers_ai' | 'custom'
+    custom_endpoint TEXT,                        -- 如 https://api.deepseek.com/v1 或 https://api.openai.com/v1
+    custom_api_key TEXT,
+    custom_model TEXT,                           -- 如 deepseek-chat, gpt-4o-mini
+    is_enabled INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_ai_config ON user_ai_configs(user_id);
+
+
 
 
 

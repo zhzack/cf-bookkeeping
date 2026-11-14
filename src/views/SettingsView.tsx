@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Download, LogOut, Cloud, BookOpen, Bell, BellOff, RotateCcw, Tags, Wand2 } from 'lucide-react';
+import { Lock, Download, LogOut, Cloud, BookOpen, Bell, BellOff, RotateCcw, Tags, Wand2, Sparkles } from 'lucide-react';
 import { fetchApi } from '../api';
 import { User, Transaction, Account, Category, AutoRule } from '../types';
 import { GuideSectionId } from '../data/userGuide';
 import { ShortcutTokensCard } from '../components/ShortcutTokensCard';
 import { CategoryManageModal } from '../components/CategoryManageModal';
 import { RuleManageModal } from '../components/RuleManageModal';
+import { AiSettingsModal } from '../components/AiSettingsModal';
 import { DynamicIcon } from '../components/DynamicIcon';
 
 interface Props {
@@ -42,6 +43,7 @@ export const SettingsView: React.FC<Props> = ({
   const [catModalOpen, setCatModalOpen] = useState(false);
   const [catModalType, setCatModalType] = useState<'expense' | 'income'>('expense');
   const [ruleModalOpen, setRuleModalOpen] = useState(false);
+  const [aiModalOpen, setAiModalOpen] = useState(false);
   const [rules, setRules] = useState<AutoRule[]>([]);
 
   const loadRules = () => {
@@ -306,6 +308,32 @@ export const SettingsView: React.FC<Props> = ({
         </div>
       </div>
 
+      {/* AI 大模型与小票识别服务配置 */}
+      <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+            <Sparkles className="w-4 h-4 text-amber-500" />
+            <span>AI 大模型与小票识图配置</span>
+          </h3>
+          <button
+            type="button"
+            onClick={() => setAiModalOpen(true)}
+            className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition shadow-sm"
+          >
+            模型参数配置
+          </button>
+        </div>
+
+        <p className="text-xs text-slate-400">
+          驱动一句话自然语言/语音记账、消费小票拍照 OCR 识别与 AI 财务月报体检。支持 Cloudflare Workers AI 内置免配置及接入 DeepSeek / OpenAI 等外部模型。
+        </p>
+
+        <div className="flex items-center gap-2 text-[11px] text-slate-600">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span>服务状态：<strong>就绪 (双模切换)</strong></span>
+        </div>
+      </div>
+
       {/* 修改密码 */}
       <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-1.5">
@@ -425,6 +453,11 @@ export const SettingsView: React.FC<Props> = ({
           loadRules();
           onCategoriesChanged();
         }}
+      />
+
+      <AiSettingsModal
+        isOpen={aiModalOpen}
+        onClose={() => setAiModalOpen(false)}
       />
     </div>
   );

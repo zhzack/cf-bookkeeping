@@ -333,6 +333,45 @@ export interface SubscriptionsSummary {
   pending_confirmation_count: number;
 }
 
+export interface UserAiConfig {
+  id?: string;
+  user_id?: string;
+  provider: 'workers_ai' | 'custom';
+  custom_endpoint?: string | null;
+  custom_api_key?: string | null;
+  custom_model?: string | null;
+  is_enabled: boolean | number;
+}
+
+export interface AiParseResult {
+  type: 'expense' | 'income' | 'transfer';
+  amount: number; // 单位：分
+  amount_yuan: number;
+  account_id?: string;
+  account_name?: string;
+  category_id?: string;
+  category_name?: string;
+  destination_account_id?: string;
+  transaction_time: string; // YYYY-MM-DD HH:mm:ss
+  remark?: string;
+  scene?: string;
+  merchant?: string;
+  confidence: number;
+  parser_type: 'workers_ai' | 'custom_llm' | 'heuristic_fallback';
+}
+
+export interface AiDiagnosisResult {
+  month: string;
+  health_score: number;       // 0 ~ 100
+  persona_tag: string;        // 财务画像标签
+  summary: string;            // 整体评价
+  highlights: string[];       // 值得肯定的亮点 (2~3条)
+  risks_and_leaks: string[];  // 隐性支出与跑冒滴漏预警 (2~3条)
+  actionable_tips: string[];  // 下月具体行动建议 (3条)
+  generated_at: string;
+}
+
+
 
 
 

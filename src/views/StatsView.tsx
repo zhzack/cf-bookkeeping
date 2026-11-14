@@ -7,6 +7,7 @@ import {
   X,
   Tag,
   ArrowUpDown,
+  Sparkles,
 } from 'lucide-react';
 import { fetchApi, formatCurrency } from '../api';
 import { OverviewData, Transaction, TransactionPhoto } from '../types';
@@ -14,6 +15,7 @@ import { DynamicIcon } from '../components/DynamicIcon';
 import { DailyCostCard } from '../components/DailyCostCard';
 import { PhotoLightbox } from '../components/PhotoLightbox';
 import { ScenePickerModal, PRESET_SCENES, SceneBatchScope } from '../components/ScenePickerModal';
+import { AiMonthlyDiagnosisModal } from '../components/AiMonthlyDiagnosisModal';
 import { getLocalTodayStr } from '../utils/image';
 
 type StatsPeriod = 'week' | 'month' | 'year';
@@ -79,6 +81,7 @@ export const StatsView: React.FC<Props> = ({ refreshTrigger, onEditTransaction }
   const [detailSort, setDetailSort] = useState<'time_desc' | 'amount_desc'>('time_desc');
   const [sceneTargetTx, setSceneTargetTx] = useState<Transaction | null>(null);
   const [availableScenes, setAvailableScenes] = useState<string[]>(PRESET_SCENES);
+  const [isAiDiagOpen, setIsAiDiagOpen] = useState(false);
 
   // 照片预览
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -438,6 +441,32 @@ export const StatsView: React.FC<Props> = ({ refreshTrigger, onEditTransaction }
 
       {/* 每日生活成本核心看板 */}
       <DailyCostCard dailyCost={data.daily_cost} period={period} />
+
+      {/* AI 财务消费体检报告入口 */}
+      <div className="bg-gradient-to-r from-violet-950 via-slate-900 to-indigo-950 rounded-3xl p-4 sm:p-5 text-white shadow-lg border border-indigo-500/20 flex items-center justify-between gap-3 relative overflow-hidden">
+        <div className="flex items-center gap-3 relative z-10">
+          <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0">
+            <Sparkles className="w-5 h-5 text-amber-300" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+              <span>{period === 'month' ? monthAnchor : '本月'} AI 财务健康体检</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-400 text-indigo-950 font-black">AI</span>
+            </div>
+            <p className="text-[11px] text-indigo-200/70 mt-0.5">
+              测算财务健康得分、消费性格画像与跑冒滴漏预警
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsAiDiagOpen(true)}
+          className="relative z-10 px-3.5 py-2 bg-gradient-to-r from-indigo-500 to-violet-500 hover:from-indigo-600 hover:to-violet-600 active:scale-95 text-white text-xs font-bold rounded-xl transition shrink-0 shadow-md flex items-center gap-1.5"
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>生成/查看体检</span>
+        </button>
+      </div>
 
       {/* 周期收支概括 */}
       <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm space-y-4">
@@ -875,6 +904,12 @@ export const StatsView: React.FC<Props> = ({ refreshTrigger, onEditTransaction }
           loading={lightboxLoading}
         />
       )}
+
+      <AiMonthlyDiagnosisModal
+        isOpen={isAiDiagOpen}
+        onClose={() => setIsAiDiagOpen(false)}
+        initialMonth={monthAnchor}
+      />
     </div>
   );
 };

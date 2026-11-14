@@ -635,4 +635,137 @@
 - **需鉴权**
 - **说明**：一键切换订阅的 `active` / `paused` 状态。
 
+---
+
+### 10. AI 智能交互与小票记账接口 (AI & OCR)
+
+支持基于 Cloudflare Workers AI（免费配额）或外部大模型（DeepSeek、OpenAI 等）进行一句话自然语言/语音记账、消费小票/发票图片 OCR 解析及月度财务健康体检。
+
+#### 10.1 获取用户 AI 配置
+- **接口**：`GET /api/ai/config`
+- **需鉴权**
+- **返回示例**：
+  ```json
+  {
+    "config": {
+      "provider": "workers_ai", // 'workers_ai' | 'custom'
+      "custom_endpoint": "",
+      "custom_api_key": "sk-****abcd", // 脱敏后的密钥
+      "custom_model": "deepseek-chat",
+      "is_enabled": true,
+      "has_workers_ai": true
+    }
+  }
+  ```
+
+#### 10.2 保存用户 AI 配置
+- **接口**：`POST /api/ai/config`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "provider": "custom", // 'workers_ai' | 'custom'
+    "custom_endpoint": "https://api.deepseek.com/v1",
+    "custom_api_key": "sk-your-actual-api-key",
+    "custom_model": "deepseek-chat",
+    "is_enabled": true,
+    "test_connection": true // 可选：为 true 时系统将先测试模型连通性
+  }
+  ```
+
+#### 10.3 自然语言 / 语音记账文本结构化解析
+- **接口**：`POST /api/ai/parse-text`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "text": "昨晚跟同事在海底捞花了320块钱用微信付的"
+  }
+  ```
+- **返回示例**：
+  ```json
+  {
+    "result": {
+      "type": "expense",
+      "amount": 32000, // 分
+      "amount_yuan": 320.0,
+      "account_id": "acc_wechat",
+      "account_name": "微信钱包",
+      "category_id": "cat_dining",
+      "category_name": "餐饮美食",
+      "transaction_time": "2026-11-14 20:30:00",
+      "remark": "海底捞 同事聚餐",
+      "scene": "朋友聚餐",
+      "confidence": 0.95,
+      "parser_type": "workers_ai" // 'workers_ai' | 'custom_llm' | 'heuristic_fallback'
+    }
+  }
+  ```
+
+#### 10.4 消费小票 / 发票 / 支付截屏图片 OCR 智能识别
+- **接口**：`POST /api/ai/parse-receipt`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "image": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ..."
+  }
+  ```
+- **返回示例**：
+  ```json
+  {
+    "result": {
+      "merchant": "星巴克咖啡 (上海陆家嘴店)",
+      "type": "expense",
+      "amount": 4200,
+      "amount_yuan": 42.0,
+      "account_id": "acc_alipay",
+      "account_name": "支付宝",
+      "category_id": "cat_dining",
+      "category_name": "餐饮美食",
+      "transaction_time": "2026-11-15 14:15:00",
+      "remark": "星巴克咖啡 燕麦拿铁x1",
+      "scene": "工作地下午茶",
+      "confidence": 0.92,
+      "parser_type": "workers_ai"
+    }
+  }
+  ```
+
+#### 10.5 AI 月度财务消费体检与诊断报告
+- **接口**：`POST /api/ai/monthly-diagnosis`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "month": "2026-11" // 可选，默认为当前月份
+  }
+  ```
+- **返回示例**：
+  ```json
+  {
+    "diagnosis": {
+      "month": "2026-11",
+      "health_score": 88,
+      "persona_tag": "理性克制的长期主义者",
+      "summary": "本月总支出平稳，储蓄率保持在 35.2% 的健康水平。持物装备日均成本稳步下探，固定订阅支出处于合理区间。",
+      "highlights": [
+        "储蓄率达到 35.2%，保持了健康的现金流冗余。",
+        "大件持物装备物尽其用，日均成本平稳摊薄。"
+      ],
+      "risks_and_leaks": [
+        "餐饮美食占总支出比重达 42%，周末聚餐开销略有上扬。",
+        "流媒体与软件会员订阅每月流出 148 元，可定期筛查闲置服务。"
+      ],
+      "actionable_tips": [
+        "为下个月餐饮设定 2000 元预算上限。",
+        "尝试将非高频使用的年费订阅转换为月费试用。",
+        "继续保持记账习惯，杜绝月终突击补账。"
+      ],
+      "generated_at": "2026-11-15 15:00:00"
+    }
+  }
+  ```
+
+
 
