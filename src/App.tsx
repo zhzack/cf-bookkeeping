@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   ReceiptText, 
   Package,
+  CreditCard,
   PieChart, 
   Wallet, 
   Settings as SettingsIcon, 
@@ -10,7 +11,7 @@ import {
   BookOpen
 } from 'lucide-react';
 import { fetchApi } from './api';
-import { User, Account, Category, Transaction, ItemWithStats } from './types';
+import { User, Account, Category, Transaction, ItemWithStats, PrepaidCardWithStats } from './types';
 import {
   FEATURE_TIPS,
   FeatureTipKey,
@@ -25,6 +26,12 @@ import { SetupWizard } from './components/SetupWizard';
 import { LoginPage } from './components/LoginPage';
 import { TransactionModal } from './components/TransactionModal';
 import { ConvertToItemModal } from './components/ConvertToItemModal';
+import { ConvertToCardModal } from './components/ConvertToCardModal';
+import { CardModal } from './components/CardModal';
+import { CardConsumeModal } from './components/CardConsumeModal';
+import { CardRechargeModal } from './components/CardRechargeModal';
+import { CardAdjustModal } from './components/CardAdjustModal';
+import { CardDetailModal } from './components/CardDetailModal';
 import { BillImportModal } from './components/BillImportModal';
 import { AccountModal } from './components/AccountModal';
 import { ItemModal } from './components/ItemModal';
@@ -33,6 +40,7 @@ import { FeatureTipModal } from './components/FeatureTipModal';
 import { MobileShortcutPairModal } from './components/MobileShortcutPairModal';
 import { TransactionsView } from './views/TransactionsView';
 import { ItemsView } from './views/ItemsView';
+import { CardsView } from './views/CardsView';
 import { StatsView } from './views/StatsView';
 import { AccountsView } from './views/AccountsView';
 import { SettingsView } from './views/SettingsView';
@@ -42,7 +50,7 @@ export function App() {
   const [needSetup, setNeedSetup] = useState(false);
   const [user, setUser] = useState<User | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'transactions' | 'items' | 'stats' | 'accounts' | 'settings'>('transactions');
+  const [activeTab, setActiveTab] = useState<'transactions' | 'items' | 'cards' | 'stats' | 'accounts' | 'settings'>('transactions');
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -51,12 +59,24 @@ export function App() {
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [convertingTx, setConvertingTx] = useState<Transaction | null>(null);
+  const [convertingCardTx, setConvertingCardTx] = useState<Transaction | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<ItemWithStats | null>(null);
   const [isWishlistDefault, setIsWishlistDefault] = useState(false);
+
+  // 充值卡相关弹窗状态
+  const [isCardModalOpen, setIsCardModalOpen] = useState(false);
+  const [editingCard, setEditingCard] = useState<PrepaidCardWithStats | null>(null);
+  const [isCardConsumeOpen, setIsCardConsumeOpen] = useState(false);
+  const [consumingCard, setConsumingCard] = useState<PrepaidCardWithStats | null>(null);
+  const [isCardRechargeOpen, setIsCardRechargeOpen] = useState(false);
+  const [rechargingCard, setRechargingCard] = useState<PrepaidCardWithStats | null>(null);
+  const [isCardAdjustOpen, setIsCardAdjustOpen] = useState(false);
+  const [adjustingCard, setAdjustingCard] = useState<PrepaidCardWithStats | null>(null);
+  const [detailCardId, setDetailCardId] = useState<string | null>(null);
 
   // 使用说明 & 首次功能引导状态
   const [guidePrefs, setGuidePrefs] = useState<GuidePreferences>(() => loadGuidePrefs(null));
@@ -171,6 +191,15 @@ export function App() {
     }
   };
 
+  const handleDeleteCard = async (cardId: string) => {
+    try {
+      await fetchApi(`/api/cards/${cardId}`, { method: 'DELETE' });
+      triggerRefresh();
+    } catch (err: any) {
+      alert(err.message || '删除失败');
+    }
+  };
+
   const userGuideModalNode = (
     <UserGuideModal
       isOpen={isGuideOpen}
@@ -268,6 +297,14 @@ export function App() {
               大件
             </button>
             <button
+              onClick={() => setActiveTab('cards')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
+                activeTab === 'cards' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              卡包
+            </button>
+            <button
               onClick={() => setActiveTab('stats')}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
                 activeTab === 'stats' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:text-slate-900'
@@ -327,7 +364,7 @@ export function App() {
         </div>
         <div className="flex items-center gap-2.5">
           <span className="text-xs font-semibold text-slate-400">
-            {activeTab === 'transactions' ? '流水明细' : activeTab === 'items' ? '大件日均' : activeTab === 'stats' ? '财务统计' : activeTab === 'accounts' ? '账户管理' : '个人设置'}
+            {activeTab === 'transactions' ? '流水明细' : activeTab === 'items' ? '大件日均' : activeTab === 'cards' ? '会员卡包' : activeTab === 'stats' ? '财务统计' : activeTab === 'accounts' ? '账户管理' : '个人设置'}
           </span>
           <button
             type="button"
@@ -355,6 +392,9 @@ export function App() {
             onConvertToItem={(tx) => {
               setConvertingTx(tx);
             }}
+            onConvertToCard={(tx) => {
+              setConvertingCardTx(tx);
+            }}
             onOpenImport={() => setIsImportModalOpen(true)}
             accounts={accounts}
             categories={categories}
@@ -377,6 +417,29 @@ export function App() {
             }}
             refreshTrigger={refreshTrigger}
             accounts={accounts}
+          />
+        )}
+
+        {activeTab === 'cards' && (
+          <CardsView
+            accounts={accounts}
+            categories={categories}
+            onOpenAddCard={() => {
+              setEditingCard(null);
+              setIsCardModalOpen(true);
+            }}
+            onOpenDetail={(cardId) => {
+              setDetailCardId(cardId);
+            }}
+            onOpenConsume={(card) => {
+              setConsumingCard(card);
+              setIsCardConsumeOpen(true);
+            }}
+            onOpenRecharge={(card) => {
+              setRechargingCard(card);
+              setIsCardRechargeOpen(true);
+            }}
+            refreshTrigger={refreshTrigger}
           />
         )}
 
@@ -446,6 +509,16 @@ export function App() {
           <span className="text-[10px]">大件</span>
         </button>
 
+        <button
+          onClick={() => setActiveTab('cards')}
+          className={`flex flex-col items-center gap-0.5 p-1 transition ${
+            activeTab === 'cards' ? 'text-indigo-600 font-bold' : 'text-slate-400'
+          }`}
+        >
+          <CreditCard className="w-5 h-5" />
+          <span className="text-[10px]">卡包</span>
+        </button>
+
         {/* 居中记账按钮 */}
         <div className="relative -top-4">
           <button
@@ -453,6 +526,9 @@ export function App() {
               if (activeTab === 'items') {
                 setEditingItem(null);
                 setIsItemModalOpen(true);
+              } else if (activeTab === 'cards') {
+                setEditingCard(null);
+                setIsCardModalOpen(true);
               } else {
                 setEditingTx(null);
                 setIsTxModalOpen(true);
@@ -512,6 +588,93 @@ export function App() {
           setEditingTx(null);
           setConvertingTx(tx);
         }}
+        onConvertToCard={(tx) => {
+          setIsTxModalOpen(false);
+          setEditingTx(null);
+          setConvertingCardTx(tx);
+        }}
+      />
+
+      {/* 将已有开销转为会员充值卡 / 计次卡弹窗 */}
+      <ConvertToCardModal
+        isOpen={Boolean(convertingCardTx)}
+        transaction={convertingCardTx}
+        onClose={() => setConvertingCardTx(null)}
+        onSuccess={triggerRefresh}
+      />
+
+      {/* 会员充值卡弹窗 (新增 / 编辑) */}
+      <CardModal
+        isOpen={isCardModalOpen}
+        onClose={() => {
+          setIsCardModalOpen(false);
+          setEditingCard(null);
+        }}
+        onSuccess={triggerRefresh}
+        cardToEdit={editingCard}
+        accounts={accounts}
+        categories={categories}
+      />
+
+      {/* 核销打卡消费弹窗 */}
+      <CardConsumeModal
+        isOpen={isCardConsumeOpen}
+        onClose={() => {
+          setIsCardConsumeOpen(false);
+          setConsumingCard(null);
+        }}
+        onSuccess={triggerRefresh}
+        card={consumingCard}
+        categories={categories}
+        accounts={accounts}
+      />
+
+      {/* 续费追加充值弹窗 */}
+      <CardRechargeModal
+        isOpen={isCardRechargeOpen}
+        onClose={() => {
+          setIsCardRechargeOpen(false);
+          setRechargingCard(null);
+        }}
+        onSuccess={triggerRefresh}
+        card={rechargingCard}
+        accounts={accounts}
+        categories={categories}
+      />
+
+      {/* 手动校准卡内剩余弹窗 */}
+      <CardAdjustModal
+        isOpen={isCardAdjustOpen}
+        onClose={() => {
+          setIsCardAdjustOpen(false);
+          setAdjustingCard(null);
+        }}
+        onSuccess={triggerRefresh}
+        card={adjustingCard}
+      />
+
+      {/* 卡片详情与使用轨迹弹窗 */}
+      <CardDetailModal
+        isOpen={Boolean(detailCardId)}
+        cardId={detailCardId}
+        onClose={() => setDetailCardId(null)}
+        onConsume={(card) => {
+          setConsumingCard(card);
+          setIsCardConsumeOpen(true);
+        }}
+        onRecharge={(card) => {
+          setRechargingCard(card);
+          setIsCardRechargeOpen(true);
+        }}
+        onAdjust={(card) => {
+          setAdjustingCard(card);
+          setIsCardAdjustOpen(true);
+        }}
+        onEdit={(card) => {
+          setEditingCard(card);
+          setIsCardModalOpen(true);
+        }}
+        onDelete={handleDeleteCard}
       />
 
       {/* 将已有开销转为持物大件弹窗 */}

@@ -44,6 +44,7 @@ export interface Transaction {
   amortize_start_date?: string | null;
   exclude_daily_cost?: number;
   item_id?: string | null;
+  card_id?: string | null;
   source?: string | null;
   external_id?: string | null;
   created_at: string;
@@ -54,6 +55,7 @@ export interface Transaction {
   category_icon?: string;
   category_color?: string;
   item_name?: string | null;
+  card_name?: string | null;
   photo_count?: number;
   first_photo_id?: string | null;
 }
@@ -229,6 +231,64 @@ export interface AutoRule {
   category_color?: string | null;
   category_type?: 'expense' | 'income' | null;
 }
+
+export interface PrepaidCard {
+  id: string;
+  user_id: string;
+  name: string;
+  type: 'balance' | 'times';
+  merchant?: string | null;
+  icon?: string | null;
+  color?: string | null;
+  initial_amount: number;       // 分，首次充值实付
+  initial_value: number;        // 首次面值 (余额卡为分，计次卡为次数)
+  gift_amount: number;          // 分，赠送金额 (仅储值卡)
+  current_value: number;        // 当前剩余价值 (余额卡为分，计次卡为次数)
+  total_spent_amount: number;   // 累计实付充值总额 (分)
+  total_value: number;          // 累计获得总价值 (余额卡为分，计次卡为累计次数)
+  status: 'active' | 'exhausted' | 'expired' | 'refunded';
+  valid_until?: string | null;  // YYYY-MM-DD
+  linked_transaction_id?: string | null;
+  remark?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PrepaidCardWithStats extends PrepaidCard {
+  per_unit_cost: number;        // 计次卡单次折算成本(分/次)；余额卡为每1元实付成本比例(分/元)
+  remaining_worth: number;      // 剩余价值折算的人民币残值(分)
+  consumed_value: number;       // 已消费价值 (已扣分 或 已用次数)
+  usage_percent: number;        // 已使用进度 0~100
+  expiration_status: 'none' | 'valid' | 'expiring' | 'expired';
+  days_left?: number;           // 距有效期剩余天数
+  logs?: PrepaidCardLog[];
+}
+
+export interface PrepaidCardLog {
+  id: string;
+  card_id: string;
+  user_id: string;
+  type: 'recharge' | 'consume' | 'adjust' | 'refund';
+  delta_value: number;          // 变动价值 (+充值 / -消费)
+  actual_amount: number;        // 发生的人民币金额(分)
+  transaction_id?: string | null;
+  account_id?: string | null;
+  log_time: string;
+  remark?: string | null;
+  created_at: string;
+  account_name?: string | null;
+}
+
+export interface CardsSummary {
+  total_cards: number;
+  active_cards: number;
+  total_remaining_worth: number;
+  total_spent_amount: number;
+  expiring_count: number;
+  times_cards_count: number;
+  balance_cards_count: number;
+}
+
 
 
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, Check, Package, Layers, Tags, Wand2 } from 'lucide-react';
+import { X, Check, Package, CreditCard, Layers, Tags, Wand2 } from 'lucide-react';
 import { fetchApi } from '../api';
 import { Account, AutoRule, Category, Transaction, TransactionPhoto } from '../types';
 import { DynamicIcon } from './DynamicIcon';
@@ -19,6 +19,7 @@ interface Props {
   onCategoriesChanged?: () => void;
   initialData?: Transaction | null;
   onConvertToItem?: (tx: Transaction) => void;
+  onConvertToCard?: (tx: Transaction) => void;
 }
 
 export const TransactionModal: React.FC<Props> = ({
@@ -30,6 +31,7 @@ export const TransactionModal: React.FC<Props> = ({
   onCategoriesChanged,
   initialData,
   onConvertToItem,
+  onConvertToCard,
 }) => {
   const [type, setType] = useState<'expense' | 'income' | 'transfer'>('expense');
   const [amountStr, setAmountStr] = useState('');
@@ -873,6 +875,20 @@ export const TransactionModal: React.FC<Props> = ({
                     >
                       <Package className="w-3.5 h-3.5" />
                       <span>将这笔开销设为持物大件并补充信息</span>
+                    </button>
+                  )}
+
+                  {initialData && onConvertToCard && !initialData.card_id && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onConvertToCard(initialData);
+                      }}
+                      className="w-full py-2 px-3 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200/80 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition"
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>将这笔开销转为会员充值卡 / 计次卡</span>
                     </button>
                   )}
                 </>

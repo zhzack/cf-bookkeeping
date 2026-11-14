@@ -40,6 +40,11 @@ import {
   Flame,
   ShieldAlert,
   Layers,
+  Scissors,
+  Dumbbell,
+  Sparkles,
+  Ticket,
+  Fuel,
 } from 'lucide-react';
 
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -83,6 +88,11 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Flame,
   ShieldAlert,
   Layers,
+  Scissors,
+  Dumbbell,
+  Sparkles,
+  Ticket,
+  Fuel,
 };
 
 interface Props {

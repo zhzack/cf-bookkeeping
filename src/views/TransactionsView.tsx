@@ -5,6 +5,7 @@ import {
   Plus,
   Calendar,
   Package,
+  CreditCard,
   Upload,
   Search,
   SlidersHorizontal,
@@ -33,6 +34,7 @@ interface Props {
   onOpenAddModal: () => void;
   onEditTransaction: (tx: Transaction) => void;
   onConvertToItem?: (tx: Transaction) => void;
+  onConvertToCard?: (tx: Transaction) => void;
   onOpenImport?: () => void;
   accounts?: Account[];
   categories?: Category[];
@@ -44,6 +46,7 @@ export const TransactionsView: React.FC<Props> = ({
   onOpenAddModal,
   onEditTransaction,
   onConvertToItem,
+  onConvertToCard,
   onOpenImport,
   accounts: propAccounts,
   categories: propCategories,
@@ -800,6 +803,11 @@ export const TransactionsView: React.FC<Props> = ({
                                   📦 {tx.item_name ? `大件·${tx.item_name}` : '已关联大件'}
                                 </span>
                               )}
+                              {tx.card_name && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-purple-50 text-purple-600 border border-purple-200/70">
+                                  💳 {tx.card_name}
+                                </span>
+                              )}
                               {isExpense && Boolean(tx.exclude_daily_cost) && (
                                 <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-slate-100 text-slate-500">
                                   不计入日均
@@ -831,6 +839,21 @@ export const TransactionsView: React.FC<Props> = ({
                             >
                               <Package className="w-3 h-3" />
                               <span className="hidden sm:inline">设为大件</span>
+                            </button>
+                          )}
+
+                          {isExpense && !tx.card_id && !tx.item_id && onConvertToCard && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onConvertToCard(tx);
+                              }}
+                              className="px-2 py-1 text-[11px] font-medium rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-600 flex items-center gap-1 transition sm:opacity-0 sm:group-hover:opacity-100"
+                              title="转为会员充值卡或计次卡"
+                            >
+                              <CreditCard className="w-3 h-3" />
+                              <span className="hidden sm:inline">设为充值卡</span>
                             </button>
                           )}
 

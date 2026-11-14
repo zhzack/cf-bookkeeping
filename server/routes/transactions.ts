@@ -155,6 +155,7 @@ const TX_LIST_JOINS = `
   LEFT JOIN accounts da ON t.destination_account_id = da.id
   LEFT JOIN categories c ON t.category_id = c.id
   LEFT JOIN items i ON t.item_id = i.id
+  LEFT JOIN prepaid_cards pc ON t.card_id = pc.id
 `;
 
 function buildTransactionFilterClause(userId: string, filter: TxFilterInput) {
@@ -217,6 +218,7 @@ function buildTransactionFilterClause(userId: string, filter: TxFilterInput) {
       OR COALESCE(a.name, '') LIKE ? ESCAPE '\\'
       OR COALESCE(da.name, '') LIKE ? ESCAPE '\\'
       OR COALESCE(i.name, '') LIKE ? ESCAPE '\\'
+      OR COALESCE(pc.name, '') LIKE ? ESCAPE '\\'
       OR printf('%.2f', t.amount / 100.0) LIKE ? ESCAPE '\\'
     )`;
     params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
@@ -629,6 +631,7 @@ transactionsRouter.get('/', async (c) => {
       t.amortize_start_date,
       COALESCE(t.exclude_daily_cost, 0) AS exclude_daily_cost,
       t.item_id,
+      t.card_id,
       t.source,
       t.external_id,
       t.created_at,
@@ -638,6 +641,7 @@ transactionsRouter.get('/', async (c) => {
       c.icon AS category_icon,
       c.color AS category_color,
       i.name AS item_name,
+      pc.name AS card_name,
       (SELECT COUNT(*) FROM transaction_photos p WHERE p.transaction_id = t.id) AS photo_count,
       (SELECT p.id FROM transaction_photos p WHERE p.transaction_id = t.id ORDER BY p.created_at ASC LIMIT 1) AS first_photo_id
     ${TX_LIST_JOINS}
@@ -710,6 +714,7 @@ transactionsRouter.post('/', async (c) => {
     amortize_days,
     amortize_start_date,
     exclude_daily_cost,
+    card_id,
     photos,
     convert_to_item,
     item_details,
@@ -787,9 +792,11 @@ transactionsRouter.post('/', async (c) => {
     );
   }
 
+  const resolvedCardId = typeof card_id === 'string' && card_id.trim() ? card_id.trim() : null;
+
   await c.env.DB.prepare(
-    `INSERT INTO transactions (id, user_id, type, amount, account_id, destination_account_id, category_id, transaction_time, remark, scene, amortize_days, amortize_start_date, exclude_daily_cost, item_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO transactions (id, user_id, type, amount, account_id, destination_account_id, category_id, transaction_time, remark, scene, amortize_days, amortize_start_date, exclude_daily_cost, item_id, card_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id,
     user.id,
@@ -804,7 +811,8 @@ transactionsRouter.post('/', async (c) => {
     dailyCost.amortizeDays,
     dailyCost.amortizeStartDate,
     dailyCost.excludeDailyCost,
-    createdItemId
+    createdItemId,
+    resolvedCardId
   ).run();
 
   if (photoCheck.items.length > 0) {
@@ -908,6 +916,125 @@ transactionsRouter.post('/:id/convert-to-item', async (c) => {
     .run();
 
   return c.json({ item_id: itemId, message: '已将该笔开销转为持物大件' });
+});
+
+// 将已有的一笔支出流水转为会员充值卡或计次卡
+transactionsRouter.post('/:id/convert-to-card', async (c) => {
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const {
+    name,
+    type = 'balance', // 'balance' | 'times'
+    merchant,
+    initial_value,
+    gift_amount = 0,
+    valid_until,
+    remark,
+    icon = 'credit-card',
+    color = '#6366f1',
+  } = body;
+
+  const tx = await c.env.DB.prepare(
+    'SELECT id, type, amount, account_id, transaction_time, remark, card_id FROM transactions WHERE id = ? AND user_id = ?'
+  )
+    .bind(id, user.id)
+    .first<{
+      id: string;
+      type: string;
+      amount: number;
+      account_id: string;
+      transaction_time: string;
+      remark: string | null;
+      card_id: string | null;
+    }>();
+
+  if (!tx) {
+    return c.json({ error: '未找到该流水记录' }, 404);
+  }
+  if (tx.type !== 'expense') {
+    return c.json({ error: '仅支持将支出流水转为充值卡' }, 400);
+  }
+  if (tx.card_id) {
+    return c.json({ error: '该笔流水已关联充值卡' }, 400);
+  }
+
+  const finalName = (name || tx.remark || '').trim();
+  if (!finalName) {
+    return c.json({ error: '请输入充值卡名称' }, 400);
+  }
+
+  const giftCents = Math.round(Number(gift_amount) || 0);
+  let parsedValue = 0;
+  if (type === 'times') {
+    parsedValue = Math.round(Number(initial_value) || 0);
+    if (parsedValue <= 0) {
+      return c.json({ error: '计次卡总次数必须大于 0' }, 400);
+    }
+  } else {
+    // 余额卡: 若用户未显式填初始面值，则默认等于流水金额 + 赠送金
+    parsedValue = initial_value !== undefined && Number(initial_value) > 0
+      ? Math.round(Number(initial_value))
+      : (tx.amount + giftCents);
+    if (parsedValue <= 0) {
+      return c.json({ error: '储值卡卡内面值必须大于 0' }, 400);
+    }
+  }
+
+  const cardId = 'crd_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+
+  await c.env.DB.prepare(
+    `INSERT INTO prepaid_cards (
+      id, user_id, name, type, merchant, icon, color,
+      initial_amount, initial_value, gift_amount, current_value,
+      total_spent_amount, total_value, status, valid_until, linked_transaction_id, remark
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`
+  ).bind(
+    cardId,
+    user.id,
+    finalName,
+    type,
+    merchant?.trim() || null,
+    icon,
+    color,
+    tx.amount,
+    parsedValue,
+    giftCents,
+    parsedValue,
+    tx.amount,
+    parsedValue,
+    valid_until || null,
+    id,
+    remark?.trim() || tx.remark || null
+  ).run();
+
+  // 记录初始 recharge 日志
+  const logId = 'clg_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  await c.env.DB.prepare(
+    `INSERT INTO prepaid_card_logs (
+      id, card_id, user_id, type, delta_value, actual_amount,
+      transaction_id, account_id, log_time, remark
+    ) VALUES (?, ?, ?, 'recharge', ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    logId,
+    cardId,
+    user.id,
+    parsedValue,
+    tx.amount,
+    id,
+    tx.account_id,
+    tx.transaction_time,
+    `流水转充值卡: ${finalName}`
+  ).run();
+
+  // 将该笔大额流水的 exclude_daily_cost 设为 1，并绑定 card_id
+  await c.env.DB.prepare(
+    `UPDATE transactions
+     SET card_id = ?, exclude_daily_cost = 1, amortize_days = NULL, amortize_start_date = NULL
+     WHERE id = ? AND user_id = ?`
+  ).bind(cardId, id, user.id).run();
+
+  return c.json({ card_id: cardId, message: '已将该笔开销转为会员充值卡' });
 });
 
 // 单独更新或清除某笔流水的消费场景

@@ -196,6 +196,25 @@
 - **批量改分类**：`PATCH /api/transactions/batch-category`（支持 `scope`: `'ids' | 'category' | 'account' | 'account_category' | 'remark' | 'filter'`、`target_category_id`、`only_uncategorized` 及 `preview: true`，自动按目标分类收支类型隔离防护）
 - **需鉴权**
 
+#### 2.10 将已有支出流水设为会员充值卡或计次卡
+- **接口**：`POST /api/transactions/:id/convert-to-card`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "name": "永琪美发储值卡", // 必填
+    "type": "balance", // 'balance' (储值卡) | 'times' (计次卡)
+    "merchant": "永琪造型", // 可选
+    "initial_value": 220000, // 计次卡为总次数(如 20)，储值卡为面值(分，默认流水金额+赠送)
+    "gift_amount": 20000, // 可选，赠送金额(分)
+    "valid_until": "2027-11-14", // 可选，有效期 YYYY-MM-DD
+    "remark": "卡号 6228...", // 可选
+    "icon": "Scissors",
+    "color": "#6366f1"
+  }
+  ```
+- **说明**：自动创建充值卡与初始充值日志，并将原流水的 `card_id` 绑定，将 `exclude_daily_cost` 设为 `1`，避免与后续日常核销打卡重复统计。
+
 ---
 
 ### 3. 账户管理接口 (Accounts)
@@ -403,3 +422,119 @@
     }
   }
   ```
+
+---
+
+### 8. 预付费会员卡与计次卡接口 (Cards)
+
+针对健身房私教、美容美发、洗车汽修、咖啡储值卡等一次性大额消费充值，后续逐步消耗的场景。
+
+#### 8.1 获取充值卡列表与汇总看板
+- **接口**：`GET /api/cards`
+- **需鉴权**
+- **Query 参数**：`status` (`all` | `active` | `exhausted` | `expired` | `refunded`，默认 `all`)
+- **返回示例**：
+  ```json
+  {
+    "cards": [
+      {
+        "id": "crd_xxxx",
+        "name": "威尔仕健身私教卡",
+        "type": "times", // 'times' | 'balance'
+        "merchant": "威尔仕健身",
+        "initial_amount": 500000, // 首次充值实付 5000 元
+        "initial_value": 20, // 初始 20 次
+        "current_value": 12, // 当前剩余 12 次
+        "total_spent_amount": 500000,
+        "total_value": 20,
+        "per_unit_cost": 25000, // 单次折算成本 250.00 元/次
+        "remaining_worth": 300000, // 剩余折合人民币 3000.00 元
+        "consumed_value": 8, // 已消费 8 次
+        "usage_percent": 40, // 已消费 40%
+        "status": "active",
+        "valid_until": "2027-11-14",
+        "expiration_status": "valid",
+        "days_left": 365
+      }
+    ],
+    "summary": {
+      "total_cards": 5,
+      "active_cards": 4,
+      "total_remaining_worth": 860000, // 卡内剩余折算总资产 8600.00 元
+      "total_spent_amount": 1500000, // 历史累计总投入 15000.00 元
+      "expiring_count": 1, // 30天内即将到期卡数
+      "times_cards_count": 2,
+      "balance_cards_count": 3
+    }
+  }
+  ```
+
+#### 8.2 创建会员充值卡 / 次卡
+- **接口**：`POST /api/cards`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "name": "永琪美发储值卡",
+    "type": "balance", // 'balance' 或 'times'
+    "merchant": "永琪造型",
+    "amount": 200000, // 实付金额 (分)
+    "initial_value": 220000, // 面值 (分) 或 初始次数 (整数)
+    "gift_amount": 20000, // 赠送金额 (分，可选)
+    "valid_until": "2027-11-14", // 有效期 (可选)
+    "remark": "卡号 6228...",
+    "account_id": "acc_xxxx", // 付款账户 (可选)
+    "sync_ledger": true, // 是否同步生成一笔充值支出流水 (标记不计入日均)
+    "category_id": "cat_xxxx"
+  }
+  ```
+
+#### 8.3 查询单张充值卡详情与完整日志
+- **接口**：`GET /api/cards/:id`
+- **需鉴权**
+- **返回**：包含卡片统计信息与按时间倒序排列的全部变动日志（充值、消费核销、校准、退款）。
+
+#### 8.4 修改充值卡基本信息
+- **接口**：`PUT /api/cards/:id`
+- **需鉴权**
+- **请求体**：支持修改 `name`, `merchant`, `icon`, `color`, `valid_until`, `remark`, `status`。
+
+#### 8.5 删除充值卡
+- **接口**：`DELETE /api/cards/:id`
+- **需鉴权**
+
+#### 8.6 核销打卡消费 (Consume)
+- **接口**：`POST /api/cards/:id/consume`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "value": 1, // 计次卡为扣减次数(如 1)；余额卡为扣减金额(分)
+    "remark": "洗剪吹一次", // 消费说明
+    "date": "2026-11-15 14:30:00", // 可选，默认当前时间
+    "sync_ledger": true, // 是否同步在记账明细中生成一条生活消费流水
+    "category_id": "cat_xxxx", // 支出分类 (如美容美发)
+    "scene": "自我提升" // 消费场景 (可选)
+  }
+  ```
+
+#### 8.7 续费追加充值 (Recharge)
+- **接口**：`POST /api/cards/:id/recharge`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "amount": 200000, // 本次实付 (分)
+    "value": 20, // 追加次数 或 追加面值 (分)
+    "gift_amount": 0,
+    "remark": "续卡优惠活动",
+    "account_id": "acc_xxxx",
+    "sync_ledger": true
+  }
+  ```
+
+#### 8.8 手动校准卡内数值 (Adjust)
+- **接口**：`POST /api/cards/:id/adjust`
+- **需鉴权**
+- **请求体**：`{ "target_value": 15, "remark": "商家额外赠送1次" }`
+
