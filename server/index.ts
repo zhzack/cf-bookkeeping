@@ -56,7 +56,10 @@ app.route('/api', api);
 app.get('*', async (c) => {
   if (c.env.ASSETS) {
     const res = await c.env.ASSETS.fetch(c.req.raw);
+    const url = new URL(c.req.url);
     const contentType = res.headers.get('content-type') || '';
+
+    // HTML 页面绝不缓存，确保每次部署用户第一时间拿到最新的 index.html
     if (contentType.includes('text/html')) {
       const headers = new Headers(res.headers);
       headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -67,6 +70,17 @@ app.get('*', async (c) => {
         headers,
       });
     }
+
+    // Vite 构建的打包产物带有内容指纹 hash (/assets/*)，开启 1 年强缓存 (immutable)
+    if (url.pathname.startsWith('/assets/')) {
+      const headers = new Headers(res.headers);
+      headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+      return new Response(res.body, {
+        status: res.status,
+        headers,
+      });
+    }
+
     return res;
   }
   return c.text('Cloudflare Bookkeeping Backend is running. Frontend static assets binding not found.', 404);

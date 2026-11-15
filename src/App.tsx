@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { 
   ReceiptText, 
   Package,
@@ -23,32 +23,74 @@ import {
   resetAllFeatureTips,
   setDisableAllFeatureTips,
 } from './data/userGuide';
-import { SetupWizard } from './components/SetupWizard';
-import { LoginPage } from './components/LoginPage';
-import { TransactionModal } from './components/TransactionModal';
-import { ConvertToItemModal } from './components/ConvertToItemModal';
-import { ConvertToCardModal } from './components/ConvertToCardModal';
-import { CardModal } from './components/CardModal';
-import { CardConsumeModal } from './components/CardConsumeModal';
-import { CardRechargeModal } from './components/CardRechargeModal';
-import { CardAdjustModal } from './components/CardAdjustModal';
-import { CardDetailModal } from './components/CardDetailModal';
-import { SubscriptionModal } from './components/SubscriptionModal';
-import { SubscriptionDetailModal } from './components/SubscriptionDetailModal';
-import { AiRecordModal } from './components/AiRecordModal';
-import { BillImportModal } from './components/BillImportModal';
-import { AccountModal } from './components/AccountModal';
-import { ItemModal } from './components/ItemModal';
-import { UserGuideModal } from './components/UserGuideModal';
-import { FeatureTipModal } from './components/FeatureTipModal';
-import { MobileShortcutPairModal } from './components/MobileShortcutPairModal';
 import { TransactionsView } from './views/TransactionsView';
-import { ItemsView } from './views/ItemsView';
-import { CardsView } from './views/CardsView';
-import { SubscriptionsView } from './views/SubscriptionsView';
-import { StatsView } from './views/StatsView';
-import { AccountsView } from './views/AccountsView';
-import { SettingsView } from './views/SettingsView';
+
+// 懒加载各功能视图与弹窗（路由级按需代码拆分，大幅缩减首屏加载时间）
+const ItemsView = lazy(() => import('./views/ItemsView').then((m) => ({ default: m.ItemsView })));
+const CardsView = lazy(() => import('./views/CardsView').then((m) => ({ default: m.CardsView })));
+const SubscriptionsView = lazy(() =>
+  import('./views/SubscriptionsView').then((m) => ({ default: m.SubscriptionsView }))
+);
+const StatsView = lazy(() => import('./views/StatsView').then((m) => ({ default: m.StatsView })));
+const AccountsView = lazy(() => import('./views/AccountsView').then((m) => ({ default: m.AccountsView })));
+const SettingsView = lazy(() => import('./views/SettingsView').then((m) => ({ default: m.SettingsView })));
+
+const SetupWizard = lazy(() => import('./components/SetupWizard').then((m) => ({ default: m.SetupWizard })));
+const LoginPage = lazy(() => import('./components/LoginPage').then((m) => ({ default: m.LoginPage })));
+const TransactionModal = lazy(() =>
+  import('./components/TransactionModal').then((m) => ({ default: m.TransactionModal }))
+);
+const ConvertToItemModal = lazy(() =>
+  import('./components/ConvertToItemModal').then((m) => ({ default: m.ConvertToItemModal }))
+);
+const ConvertToCardModal = lazy(() =>
+  import('./components/ConvertToCardModal').then((m) => ({ default: m.ConvertToCardModal }))
+);
+const CardModal = lazy(() => import('./components/CardModal').then((m) => ({ default: m.CardModal })));
+const CardConsumeModal = lazy(() =>
+  import('./components/CardConsumeModal').then((m) => ({ default: m.CardConsumeModal }))
+);
+const CardRechargeModal = lazy(() =>
+  import('./components/CardRechargeModal').then((m) => ({ default: m.CardRechargeModal }))
+);
+const CardAdjustModal = lazy(() =>
+  import('./components/CardAdjustModal').then((m) => ({ default: m.CardAdjustModal }))
+);
+const CardDetailModal = lazy(() =>
+  import('./components/CardDetailModal').then((m) => ({ default: m.CardDetailModal }))
+);
+const SubscriptionModal = lazy(() =>
+  import('./components/SubscriptionModal').then((m) => ({ default: m.SubscriptionModal }))
+);
+const SubscriptionDetailModal = lazy(() =>
+  import('./components/SubscriptionDetailModal').then((m) => ({ default: m.SubscriptionDetailModal }))
+);
+const AiRecordModal = lazy(() =>
+  import('./components/AiRecordModal').then((m) => ({ default: m.AiRecordModal }))
+);
+const BillImportModal = lazy(() =>
+  import('./components/BillImportModal').then((m) => ({ default: m.BillImportModal }))
+);
+const AccountModal = lazy(() =>
+  import('./components/AccountModal').then((m) => ({ default: m.AccountModal }))
+);
+const ItemModal = lazy(() => import('./components/ItemModal').then((m) => ({ default: m.ItemModal })));
+const UserGuideModal = lazy(() =>
+  import('./components/UserGuideModal').then((m) => ({ default: m.UserGuideModal }))
+);
+const FeatureTipModal = lazy(() =>
+  import('./components/FeatureTipModal').then((m) => ({ default: m.FeatureTipModal }))
+);
+const MobileShortcutPairModal = lazy(() =>
+  import('./components/MobileShortcutPairModal').then((m) => ({ default: m.MobileShortcutPairModal }))
+);
+
+const ViewSkeleton = () => (
+  <div className="space-y-4 animate-pulse py-4">
+    <div className="h-24 bg-white rounded-3xl w-full border border-slate-100"></div>
+    <div className="h-64 bg-white rounded-3xl w-full border border-slate-100"></div>
+  </div>
+);
 
 export function App() {
   const [initLoading, setInitLoading] = useState(true);
@@ -255,7 +297,13 @@ export function App() {
   // 首次部署：引导设置管理员
   if (needSetup) {
     return (
-      <>
+      <Suspense
+        fallback={
+          <div className="min-h-screen flex items-center justify-center bg-slate-50">
+            <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          </div>
+        }
+      >
         <SetupWizard
           onSuccess={(u, openGuideAfterSetup) => {
             setUser(u);
@@ -269,14 +317,20 @@ export function App() {
           onOpenGuide={() => openGuideModal('periodic-bills')}
         />
         {userGuideModalNode}
-      </>
+      </Suspense>
     );
   }
 
   // 未登录状态：展示账号密码登录表单
   if (!user) {
     return (
-      <>
+      <Suspense
+        fallback={
+          <div className="min-h-screen flex items-center justify-center bg-slate-50">
+            <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          </div>
+        }
+      >
         <LoginPage
           onSuccess={(u) => {
             setUser(u);
@@ -285,7 +339,7 @@ export function App() {
           onOpenGuide={() => openGuideModal('periodic-bills')}
         />
         {userGuideModalNode}
-      </>
+      </Suspense>
     );
   }
 
@@ -448,110 +502,112 @@ export function App() {
           />
         )}
 
-        {activeTab === 'items' && (
-          <ItemsView
-            onOpenAddItem={(isWishlist = false) => {
-              setIsWishlistDefault(isWishlist);
-              setEditingItem(null);
-              setIsItemModalOpen(true);
-            }}
-            onEditItem={(item) => {
-              setIsWishlistDefault(item.status === 'wishlist');
-              setEditingItem(item);
-              setIsItemModalOpen(true);
-            }}
-            refreshTrigger={refreshTrigger}
-            accounts={accounts}
-          />
-        )}
+        <Suspense fallback={<ViewSkeleton />}>
+          {activeTab === 'items' && (
+            <ItemsView
+              onOpenAddItem={(isWishlist = false) => {
+                setIsWishlistDefault(isWishlist);
+                setEditingItem(null);
+                setIsItemModalOpen(true);
+              }}
+              onEditItem={(item) => {
+                setIsWishlistDefault(item.status === 'wishlist');
+                setEditingItem(item);
+                setIsItemModalOpen(true);
+              }}
+              refreshTrigger={refreshTrigger}
+              accounts={accounts}
+            />
+          )}
 
-        {activeTab === 'cards' && (
-          <CardsView
-            accounts={accounts}
-            categories={categories}
-            onOpenAddCard={() => {
-              setEditingCard(null);
-              setIsCardModalOpen(true);
-            }}
-            onOpenDetail={(cardId) => {
-              setDetailCardId(cardId);
-            }}
-            onOpenConsume={(card) => {
-              setConsumingCard(card);
-              setIsCardConsumeOpen(true);
-            }}
-            onOpenRecharge={(card) => {
-              setRechargingCard(card);
-              setIsCardRechargeOpen(true);
-            }}
-            refreshTrigger={refreshTrigger}
-          />
-        )}
+          {activeTab === 'cards' && (
+            <CardsView
+              accounts={accounts}
+              categories={categories}
+              onOpenAddCard={() => {
+                setEditingCard(null);
+                setIsCardModalOpen(true);
+              }}
+              onOpenDetail={(cardId) => {
+                setDetailCardId(cardId);
+              }}
+              onOpenConsume={(card) => {
+                setConsumingCard(card);
+                setIsCardConsumeOpen(true);
+              }}
+              onOpenRecharge={(card) => {
+                setRechargingCard(card);
+                setIsCardRechargeOpen(true);
+              }}
+              refreshTrigger={refreshTrigger}
+            />
+          )}
 
-        {activeTab === 'subscriptions' && (
-          <SubscriptionsView
-            accounts={accounts}
-            categories={categories}
-            onOpenAddSub={() => {
-              setEditingSub(null);
-              setIsSubModalOpen(true);
-            }}
-            onOpenDetail={(subId) => {
-              setDetailSubId(subId);
-            }}
-            onEditSub={(sub) => {
-              setEditingSub(sub);
-              setIsSubModalOpen(true);
-            }}
-            refreshTrigger={refreshTrigger}
-            onRefreshParent={triggerRefresh}
-          />
-        )}
+          {activeTab === 'subscriptions' && (
+            <SubscriptionsView
+              accounts={accounts}
+              categories={categories}
+              onOpenAddSub={() => {
+                setEditingSub(null);
+                setIsSubModalOpen(true);
+              }}
+              onOpenDetail={(subId) => {
+                setDetailSubId(subId);
+              }}
+              onEditSub={(sub) => {
+                setEditingSub(sub);
+                setIsSubModalOpen(true);
+              }}
+              refreshTrigger={refreshTrigger}
+              onRefreshParent={triggerRefresh}
+            />
+          )}
 
-        {activeTab === 'stats' && (
-          <StatsView
-            refreshTrigger={refreshTrigger}
-            categories={categories}
-            onEditTransaction={(tx) => {
-              setEditingTx(tx);
-              setIsTxModalOpen(true);
-            }}
-          />
-        )}
+          {activeTab === 'stats' && (
+            <StatsView
+              refreshTrigger={refreshTrigger}
+              categories={categories}
+              onEditTransaction={(tx) => {
+                setEditingTx(tx);
+                setIsTxModalOpen(true);
+              }}
+            />
+          )}
 
-        {activeTab === 'accounts' && (
-          <AccountsView
-            accounts={accounts}
-            onOpenAddAccount={() => {
-              setEditingAccount(null);
-              setIsAccountModalOpen(true);
-            }}
-            onEditAccount={(acc) => {
-              setEditingAccount(acc);
-              setIsAccountModalOpen(true);
-            }}
-            onRefreshAccounts={loadBaseData}
-          />
-        )}
+          {activeTab === 'accounts' && (
+            <AccountsView
+              accounts={accounts}
+              onOpenAddAccount={() => {
+                setEditingAccount(null);
+                setIsAccountModalOpen(true);
+              }}
+              onEditAccount={(acc) => {
+                setEditingAccount(acc);
+                setIsAccountModalOpen(true);
+              }}
+              onRefreshAccounts={loadBaseData}
+            />
+          )}
 
-        {activeTab === 'settings' && (
-          <SettingsView
-            user={user}
-            accounts={accounts}
-            categories={categories}
-            onCategoriesChanged={triggerRefresh}
-            onLogout={handleLogout}
-            onOpenGuide={(sec) => openGuideModal(sec || 'periodic-bills')}
-            onOpenImport={() => setIsImportModalOpen(true)}
-            disableAllTips={guidePrefs.disableAllTips}
-            onToggleDisableAllTips={(disabled) => {
-              setGuidePrefs(setDisableAllFeatureTips(user.id, disabled));
-            }}
-            onResetFeatureTips={() => {
-              setGuidePrefs(resetAllFeatureTips(user.id));
-            }}
-          />
-        )}
+          {activeTab === 'settings' && (
+            <SettingsView
+              user={user}
+              accounts={accounts}
+              categories={categories}
+              onCategoriesChanged={triggerRefresh}
+              onLogout={handleLogout}
+              onOpenGuide={(sec) => openGuideModal(sec || 'periodic-bills')}
+              onOpenImport={() => setIsImportModalOpen(true)}
+              disableAllTips={guidePrefs.disableAllTips}
+              onToggleDisableAllTips={(disabled) => {
+                setGuidePrefs(setDisableAllFeatureTips(user.id, disabled));
+              }}
+              onResetFeatureTips={() => {
+                setGuidePrefs(resetAllFeatureTips(user.id));
+              }}
+            />
+          )}
+        </Suspense>
       </main>
 
       {/* 移动端底部 Tab 导航栏 */}
@@ -651,224 +707,258 @@ export function App() {
         </button>
       </div>
 
-      {/* 交易弹窗 (新增 / 编辑) */}
-      <TransactionModal
-        isOpen={isTxModalOpen}
-        onClose={() => {
-          setIsTxModalOpen(false);
-          setEditingTx(null);
-        }}
-        onSuccess={triggerRefresh}
-        accounts={accounts}
-        categories={categories}
-        onCategoriesChanged={triggerRefresh}
-        initialData={editingTx}
-        onConvertToItem={(tx) => {
-          setIsTxModalOpen(false);
-          setEditingTx(null);
-          setConvertingTx(tx);
-        }}
-        onConvertToCard={(tx) => {
-          setIsTxModalOpen(false);
-          setEditingTx(null);
-          setConvertingCardTx(tx);
-        }}
-      />
+      <Suspense fallback={null}>
+        {/* 交易弹窗 (新增 / 编辑) */}
+        {isTxModalOpen && (
+          <TransactionModal
+            isOpen={isTxModalOpen}
+            onClose={() => {
+              setIsTxModalOpen(false);
+              setEditingTx(null);
+            }}
+            onSuccess={triggerRefresh}
+            accounts={accounts}
+            categories={categories}
+            onCategoriesChanged={triggerRefresh}
+            initialData={editingTx}
+            onConvertToItem={(tx) => {
+              setIsTxModalOpen(false);
+              setEditingTx(null);
+              setConvertingTx(tx);
+            }}
+            onConvertToCard={(tx) => {
+              setIsTxModalOpen(false);
+              setEditingTx(null);
+              setConvertingCardTx(tx);
+            }}
+          />
+        )}
 
-      {/* 将已有开销转为会员充值卡 / 计次卡弹窗 */}
-      <ConvertToCardModal
-        isOpen={Boolean(convertingCardTx)}
-        transaction={convertingCardTx}
-        onClose={() => setConvertingCardTx(null)}
-        onSuccess={triggerRefresh}
-      />
+        {/* 将已有开销转为会员充值卡 / 计次卡弹窗 */}
+        {Boolean(convertingCardTx) && (
+          <ConvertToCardModal
+            isOpen={Boolean(convertingCardTx)}
+            transaction={convertingCardTx}
+            onClose={() => setConvertingCardTx(null)}
+            onSuccess={triggerRefresh}
+          />
+        )}
 
-      {/* 会员充值卡弹窗 (新增 / 编辑) */}
-      <CardModal
-        isOpen={isCardModalOpen}
-        onClose={() => {
-          setIsCardModalOpen(false);
-          setEditingCard(null);
-        }}
-        onSuccess={triggerRefresh}
-        cardToEdit={editingCard}
-        accounts={accounts}
-        categories={categories}
-      />
+        {/* 会员充值卡弹窗 (新增 / 编辑) */}
+        {isCardModalOpen && (
+          <CardModal
+            isOpen={isCardModalOpen}
+            onClose={() => {
+              setIsCardModalOpen(false);
+              setEditingCard(null);
+            }}
+            onSuccess={triggerRefresh}
+            cardToEdit={editingCard}
+            accounts={accounts}
+            categories={categories}
+          />
+        )}
 
-      {/* 核销打卡消费弹窗 */}
-      <CardConsumeModal
-        isOpen={isCardConsumeOpen}
-        onClose={() => {
-          setIsCardConsumeOpen(false);
-          setConsumingCard(null);
-        }}
-        onSuccess={triggerRefresh}
-        card={consumingCard}
-        categories={categories}
-        accounts={accounts}
-      />
+        {/* 核销打卡消费弹窗 */}
+        {isCardConsumeOpen && (
+          <CardConsumeModal
+            isOpen={isCardConsumeOpen}
+            onClose={() => {
+              setIsCardConsumeOpen(false);
+              setConsumingCard(null);
+            }}
+            onSuccess={triggerRefresh}
+            card={consumingCard}
+            categories={categories}
+            accounts={accounts}
+          />
+        )}
 
-      {/* 续费追加充值弹窗 */}
-      <CardRechargeModal
-        isOpen={isCardRechargeOpen}
-        onClose={() => {
-          setIsCardRechargeOpen(false);
-          setRechargingCard(null);
-        }}
-        onSuccess={triggerRefresh}
-        card={rechargingCard}
-        accounts={accounts}
-        categories={categories}
-      />
+        {/* 续费追加充值弹窗 */}
+        {isCardRechargeOpen && (
+          <CardRechargeModal
+            isOpen={isCardRechargeOpen}
+            onClose={() => {
+              setIsCardRechargeOpen(false);
+              setRechargingCard(null);
+            }}
+            onSuccess={triggerRefresh}
+            card={rechargingCard}
+            accounts={accounts}
+            categories={categories}
+          />
+        )}
 
-      {/* 手动校准卡内剩余弹窗 */}
-      <CardAdjustModal
-        isOpen={isCardAdjustOpen}
-        onClose={() => {
-          setIsCardAdjustOpen(false);
-          setAdjustingCard(null);
-        }}
-        onSuccess={triggerRefresh}
-        card={adjustingCard}
-      />
+        {/* 手动校准卡内剩余弹窗 */}
+        {isCardAdjustOpen && (
+          <CardAdjustModal
+            isOpen={isCardAdjustOpen}
+            onClose={() => {
+              setIsCardAdjustOpen(false);
+              setAdjustingCard(null);
+            }}
+            onSuccess={triggerRefresh}
+            card={adjustingCard}
+          />
+        )}
 
-      {/* 卡片详情与使用轨迹弹窗 */}
-      <CardDetailModal
-        isOpen={Boolean(detailCardId)}
-        cardId={detailCardId}
-        onClose={() => setDetailCardId(null)}
-        onConsume={(card) => {
-          setConsumingCard(card);
-          setIsCardConsumeOpen(true);
-        }}
-        onRecharge={(card) => {
-          setRechargingCard(card);
-          setIsCardRechargeOpen(true);
-        }}
-        onAdjust={(card) => {
-          setAdjustingCard(card);
-          setIsCardAdjustOpen(true);
-        }}
-        onEdit={(card) => {
-          setEditingCard(card);
-          setIsCardModalOpen(true);
-        }}
-        onDelete={handleDeleteCard}
-      />
+        {/* 卡片详情与使用轨迹弹窗 */}
+        {Boolean(detailCardId) && (
+          <CardDetailModal
+            isOpen={Boolean(detailCardId)}
+            cardId={detailCardId}
+            onClose={() => setDetailCardId(null)}
+            onConsume={(card) => {
+              setConsumingCard(card);
+              setIsCardConsumeOpen(true);
+            }}
+            onRecharge={(card) => {
+              setRechargingCard(card);
+              setIsCardRechargeOpen(true);
+            }}
+            onAdjust={(card) => {
+              setAdjustingCard(card);
+              setIsCardAdjustOpen(true);
+            }}
+            onEdit={(card) => {
+              setEditingCard(card);
+              setIsCardModalOpen(true);
+            }}
+            onDelete={handleDeleteCard}
+          />
+        )}
 
-      {/* 周期订阅弹窗 (新增 / 编辑) */}
-      <SubscriptionModal
-        isOpen={isSubModalOpen}
-        onClose={() => {
-          setIsSubModalOpen(false);
-          setEditingSub(null);
-        }}
-        onSuccess={triggerRefresh}
-        subscriptionToEdit={editingSub}
-        accounts={accounts}
-        categories={categories}
-      />
+        {/* 周期订阅弹窗 (新增 / 编辑) */}
+        {isSubModalOpen && (
+          <SubscriptionModal
+            isOpen={isSubModalOpen}
+            onClose={() => {
+              setIsSubModalOpen(false);
+              setEditingSub(null);
+            }}
+            onSuccess={triggerRefresh}
+            subscriptionToEdit={editingSub}
+            accounts={accounts}
+            categories={categories}
+          />
+        )}
 
-      {/* 订阅详情与历史扣款弹窗 */}
-      <SubscriptionDetailModal
-        isOpen={Boolean(detailSubId)}
-        subscriptionId={detailSubId}
-        onClose={() => setDetailSubId(null)}
-        onEdit={(sub) => {
-          setEditingSub(sub);
-          setIsSubModalOpen(true);
-        }}
-        onDelete={handleDeleteSub}
-        onRefreshParent={triggerRefresh}
-      />
+        {/* 订阅详情与历史扣款弹窗 */}
+        {Boolean(detailSubId) && (
+          <SubscriptionDetailModal
+            isOpen={Boolean(detailSubId)}
+            subscriptionId={detailSubId}
+            onClose={() => setDetailSubId(null)}
+            onEdit={(sub) => {
+              setEditingSub(sub);
+              setIsSubModalOpen(true);
+            }}
+            onDelete={handleDeleteSub}
+            onRefreshParent={triggerRefresh}
+          />
+        )}
 
-      {/* AI 智能快速记账弹窗 (语音/自然语言/小票OCR) */}
-      <AiRecordModal
-        isOpen={isAiRecordOpen}
-        onClose={() => setIsAiRecordOpen(false)}
-        onSuccess={triggerRefresh}
-        accounts={accounts}
-        categories={categories}
-      />
+        {/* AI 智能快速记账弹窗 (语音/自然语言/小票OCR) */}
+        {isAiRecordOpen && (
+          <AiRecordModal
+            isOpen={isAiRecordOpen}
+            onClose={() => setIsAiRecordOpen(false)}
+            onSuccess={triggerRefresh}
+            accounts={accounts}
+            categories={categories}
+          />
+        )}
 
-      {/* 将已有开销转为持物大件弹窗 */}
-      <ConvertToItemModal
-        isOpen={Boolean(convertingTx)}
-        transaction={convertingTx}
-        onClose={() => setConvertingTx(null)}
-        onSuccess={triggerRefresh}
-      />
+        {/* 将已有开销转为持物大件弹窗 */}
+        {Boolean(convertingTx) && (
+          <ConvertToItemModal
+            isOpen={Boolean(convertingTx)}
+            transaction={convertingTx}
+            onClose={() => setConvertingTx(null)}
+            onSuccess={triggerRefresh}
+          />
+        )}
 
-      {/* 微信 / 支付宝账单批量导入弹窗 */}
-      <BillImportModal
-        isOpen={isImportModalOpen}
-        accounts={accounts}
-        categories={categories}
-        onClose={() => setIsImportModalOpen(false)}
-        onSuccess={triggerRefresh}
-      />
+        {/* 微信 / 支付宝账单批量导入弹窗 */}
+        {isImportModalOpen && (
+          <BillImportModal
+            isOpen={isImportModalOpen}
+            accounts={accounts}
+            categories={categories}
+            onClose={() => setIsImportModalOpen(false)}
+            onSuccess={triggerRefresh}
+          />
+        )}
 
-      {/* 账户弹窗 (新增 / 编辑) */}
-      <AccountModal
-        isOpen={isAccountModalOpen}
-        onClose={() => {
-          setIsAccountModalOpen(false);
-          setEditingAccount(null);
-        }}
-        onSuccess={triggerRefresh}
-        account={editingAccount}
-      />
+        {/* 账户弹窗 (新增 / 编辑) */}
+        {isAccountModalOpen && (
+          <AccountModal
+            isOpen={isAccountModalOpen}
+            onClose={() => {
+              setIsAccountModalOpen(false);
+              setEditingAccount(null);
+            }}
+            onSuccess={triggerRefresh}
+            account={editingAccount}
+          />
+        )}
 
-      {/* 大件物品弹窗 (新增 / 编辑) */}
-      <ItemModal
-        isOpen={isItemModalOpen}
-        onClose={() => {
-          setIsItemModalOpen(false);
-          setEditingItem(null);
-        }}
-        onSuccess={triggerRefresh}
-        initialItem={editingItem}
-        accounts={accounts}
-        defaultWishlist={isWishlistDefault}
-      />
+        {/* 大件物品弹窗 (新增 / 编辑) */}
+        {isItemModalOpen && (
+          <ItemModal
+            isOpen={isItemModalOpen}
+            onClose={() => {
+              setIsItemModalOpen(false);
+              setEditingItem(null);
+            }}
+            onSuccess={triggerRefresh}
+            initialItem={editingItem}
+            accounts={accounts}
+            defaultWishlist={isWishlistDefault}
+          />
+        )}
 
-      {/* 首次进入功能的详细提示弹窗 */}
-      <FeatureTipModal
-        tip={activeFeatureTipKey ? FEATURE_TIPS[activeFeatureTipKey] : null}
-        onDismissOnce={() => {
-          if (!activeFeatureTipKey) return;
-          setGuidePrefs(markFeatureTipDismissed(user.id, activeFeatureTipKey));
-          setActiveFeatureTipKey(null);
-        }}
-        onDisableForever={() => {
-          setGuidePrefs(setDisableAllFeatureTips(user.id, true));
-          setActiveFeatureTipKey(null);
-        }}
-        onOpenFullGuide={(sectionId) => {
-          if (activeFeatureTipKey) {
-            setGuidePrefs(markFeatureTipDismissed(user.id, activeFeatureTipKey));
-          }
-          setActiveFeatureTipKey(null);
-          openGuideModal(sectionId);
-        }}
-      />
+        {/* 首次进入功能的详细提示弹窗 */}
+        {Boolean(activeFeatureTipKey) && (
+          <FeatureTipModal
+            tip={activeFeatureTipKey ? FEATURE_TIPS[activeFeatureTipKey] : null}
+            onDismissOnce={() => {
+              if (!activeFeatureTipKey) return;
+              setGuidePrefs(markFeatureTipDismissed(user.id, activeFeatureTipKey));
+              setActiveFeatureTipKey(null);
+            }}
+            onDisableForever={() => {
+              setGuidePrefs(setDisableAllFeatureTips(user.id, true));
+              setActiveFeatureTipKey(null);
+            }}
+            onOpenFullGuide={(sectionId) => {
+              if (activeFeatureTipKey) {
+                setGuidePrefs(markFeatureTipDismissed(user.id, activeFeatureTipKey));
+              }
+              setActiveFeatureTipKey(null);
+              openGuideModal(sectionId);
+            }}
+          />
+        )}
 
-      {/* 完整使用说明书 */}
-      {userGuideModalNode}
+        {/* 完整使用说明书 */}
+        {isGuideOpen && userGuideModalNode}
 
-      {/* 手机扫码或一键跳转快捷指令极速配对弹窗 */}
-      <MobileShortcutPairModal
-        isOpen={Boolean(mobilePairToken)}
-        token={mobilePairToken || ''}
-        onClose={() => {
-          setMobilePairToken(null);
-          if (typeof window !== 'undefined' && window.history?.replaceState) {
-            const cleanUrl = window.location.pathname;
-            window.history.replaceState({}, '', cleanUrl);
-          }
-        }}
-      />
+        {/* 手机扫码或一键跳转快捷指令极速配对弹窗 */}
+        {Boolean(mobilePairToken) && (
+          <MobileShortcutPairModal
+            isOpen={Boolean(mobilePairToken)}
+            token={mobilePairToken || ''}
+            onClose={() => {
+              setMobilePairToken(null);
+              if (typeof window !== 'undefined' && window.history?.replaceState) {
+                const cleanUrl = window.location.pathname;
+                window.history.replaceState({}, '', cleanUrl);
+              }
+            }}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }
