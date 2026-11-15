@@ -348,13 +348,15 @@ statsRouter.get('/overview', async (c) => {
 
   const netWorth = totalAssets - totalLiabilities;
 
-  // 2. 所选周期（周/月/年）总收支
+  // 2. 所选周期（周/月/年）总收支（关联外汇实时牌价折算为 CNY 基准币）
   const periodSumSql = `
     SELECT 
-      COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS period_expense,
-      COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS period_income
-    FROM transactions
-    WHERE user_id = ? AND transaction_time >= ? AND transaction_time <= ?
+      COALESCE(SUM(ROUND(CASE WHEN t.type = 'expense' THEN t.amount * COALESCE(cr.rate_to_cny, 1.0) ELSE 0 END)), 0) AS period_expense,
+      COALESCE(SUM(ROUND(CASE WHEN t.type = 'income' THEN t.amount * COALESCE(cr.rate_to_cny, 1.0) ELSE 0 END)), 0) AS period_income
+    FROM transactions t
+    LEFT JOIN accounts a ON t.account_id = a.id
+    LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
+    WHERE t.user_id = ? AND t.transaction_time >= ? AND t.transaction_time <= ?
   `;
   const periodSummary = await c.env.DB.prepare(periodSumSql).bind(user.id, startTime, endTime).first<{
     period_expense: number;
@@ -365,16 +367,18 @@ statsRouter.get('/overview', async (c) => {
   const periodIncome = periodSummary?.period_income || 0;
   const periodSurplus = periodIncome - periodExpense;
 
-  // 3. 所选周期支出分类占比（兼容未关联分类记录）
+  // 3. 所选周期支出分类占比（兼容未关联分类记录，按汇率折算）
   const categoryBreakdownSql = `
     SELECT 
       COALESCE(c.id, '__uncategorized__') AS id,
       COALESCE(c.name, '未分类') AS name,
       COALESCE(c.icon, 'HelpCircle') AS icon,
       COALESCE(c.color, '#94a3b8') AS color,
-      SUM(t.amount) as total_amount,
+      COALESCE(SUM(ROUND(t.amount * COALESCE(cr.rate_to_cny, 1.0))), 0) as total_amount,
       COUNT(t.id) as count
     FROM transactions t
+    LEFT JOIN accounts a ON t.account_id = a.id
+    LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
     LEFT JOIN categories c ON t.category_id = c.id
     WHERE t.user_id = ? AND t.type = 'expense' AND t.transaction_time >= ? AND t.transaction_time <= ?
     GROUP BY COALESCE(c.id, '__uncategorized__')
@@ -396,17 +400,19 @@ statsRouter.get('/overview', async (c) => {
     percentage: periodExpense > 0 ? Math.round((item.total_amount / periodExpense) * 1000) / 10 : 0,
   }));
 
-  // 3b. 所选周期消费场景分布
+  // 3b. 所选周期消费场景分布（按汇率折算）
   const sceneBreakdownSql = `
     SELECT
-      TRIM(scene) AS scene,
-      SUM(amount) AS total_amount,
-      COUNT(id) AS count
-    FROM transactions
-    WHERE user_id = ? AND type = 'expense'
-      AND transaction_time >= ? AND transaction_time <= ?
-      AND scene IS NOT NULL AND TRIM(scene) != ''
-    GROUP BY TRIM(scene)
+      TRIM(t.scene) AS scene,
+      COALESCE(SUM(ROUND(t.amount * COALESCE(cr.rate_to_cny, 1.0))), 0) AS total_amount,
+      COUNT(t.id) AS count
+    FROM transactions t
+    LEFT JOIN accounts a ON t.account_id = a.id
+    LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
+    WHERE t.user_id = ? AND t.type = 'expense'
+      AND t.transaction_time >= ? AND t.transaction_time <= ?
+      AND t.scene IS NOT NULL AND TRIM(t.scene) != ''
+    GROUP BY TRIM(t.scene)
     ORDER BY total_amount DESC
   `;
   const { results: rawSceneBreakdown } = await c.env.DB.prepare(sceneBreakdownSql)
@@ -418,28 +424,32 @@ statsRouter.get('/overview', async (c) => {
     percentage: periodExpense > 0 ? Math.round((item.total_amount / periodExpense) * 1000) / 10 : 0,
   }));
 
-  // 4. 支出趋势（周/月按天补齐 0 值；年按 1~12 月补齐 0 值）
+  // 4. 支出趋势（周/月按天补齐 0 值；年按 1~12 月补齐 0 值，按汇率折算）
   const trendUnit: 'day' | 'month' = period === 'year' ? 'month' : 'day';
   const trendSql =
     trendUnit === 'month'
       ? `
         SELECT
-          SUBSTR(transaction_time, 1, 7) AS bucket,
-          COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense,
-          COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income
-        FROM transactions
-        WHERE user_id = ? AND transaction_time >= ? AND transaction_time <= ?
-        GROUP BY SUBSTR(transaction_time, 1, 7)
+          SUBSTR(t.transaction_time, 1, 7) AS bucket,
+          COALESCE(SUM(ROUND(CASE WHEN t.type = 'expense' THEN t.amount * COALESCE(cr.rate_to_cny, 1.0) ELSE 0 END)), 0) AS expense,
+          COALESCE(SUM(ROUND(CASE WHEN t.type = 'income' THEN t.amount * COALESCE(cr.rate_to_cny, 1.0) ELSE 0 END)), 0) AS income
+        FROM transactions t
+        LEFT JOIN accounts a ON t.account_id = a.id
+        LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
+        WHERE t.user_id = ? AND t.transaction_time >= ? AND t.transaction_time <= ?
+        GROUP BY SUBSTR(t.transaction_time, 1, 7)
         ORDER BY bucket ASC
       `
       : `
         SELECT
-          SUBSTR(transaction_time, 1, 10) AS bucket,
-          COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense,
-          COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income
-        FROM transactions
-        WHERE user_id = ? AND transaction_time >= ? AND transaction_time <= ?
-        GROUP BY SUBSTR(transaction_time, 1, 10)
+          SUBSTR(t.transaction_time, 1, 10) AS bucket,
+          COALESCE(SUM(ROUND(CASE WHEN t.type = 'expense' THEN t.amount * COALESCE(cr.rate_to_cny, 1.0) ELSE 0 END)), 0) AS expense,
+          COALESCE(SUM(ROUND(CASE WHEN t.type = 'income' THEN t.amount * COALESCE(cr.rate_to_cny, 1.0) ELSE 0 END)), 0) AS income
+        FROM transactions t
+        LEFT JOIN accounts a ON t.account_id = a.id
+        LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
+        WHERE t.user_id = ? AND t.transaction_time >= ? AND t.transaction_time <= ?
+        GROUP BY SUBSTR(t.transaction_time, 1, 10)
         ORDER BY bucket ASC
       `;
 
@@ -477,11 +487,11 @@ statsRouter.get('/overview', async (c) => {
     }
   }
 
-  // 5. 每日生活成本（固定开销摊销 + 日常流水 + 大件摊薄 + 环比上一周期）
+  // 5. 每日生活成本（固定开销摊销 + 日常流水 + 大件摊薄 + 环比上一周期，按汇率折算）
   const amortizedSql = `
     SELECT
       t.id,
-      t.amount,
+      ROUND(t.amount * COALESCE(cr.rate_to_cny, 1.0)) AS amount,
       t.transaction_time,
       t.remark,
       t.amortize_days,
@@ -490,6 +500,8 @@ statsRouter.get('/overview', async (c) => {
       c.icon AS category_icon,
       c.color AS category_color
     FROM transactions t
+    LEFT JOIN accounts a ON t.account_id = a.id
+    LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
     LEFT JOIN categories c ON t.category_id = c.id
     WHERE t.user_id = ?
       AND t.type = 'expense'
@@ -500,15 +512,17 @@ statsRouter.get('/overview', async (c) => {
 
   const plainExpenseSql = `
     SELECT
-      amount,
-      SUBSTR(transaction_time, 1, 10) AS day,
-      COALESCE(exclude_daily_cost, 0) AS exclude_daily_cost
-    FROM transactions
-    WHERE user_id = ?
-      AND type = 'expense'
-      AND (amortize_days IS NULL OR amortize_days <= 1)
-      AND transaction_time >= ?
-      AND transaction_time <= ?
+      ROUND(t.amount * COALESCE(cr.rate_to_cny, 1.0)) AS amount,
+      SUBSTR(t.transaction_time, 1, 10) AS day,
+      COALESCE(t.exclude_daily_cost, 0) AS exclude_daily_cost
+    FROM transactions t
+    LEFT JOIN accounts a ON t.account_id = a.id
+    LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
+    WHERE t.user_id = ?
+      AND t.type = 'expense'
+      AND (t.amortize_days IS NULL OR t.amortize_days <= 1)
+      AND t.transaction_time >= ?
+      AND t.transaction_time <= ?
   `;
 
   const plainQueryStart = `${prevRange.periodStart} 00:00:00`;

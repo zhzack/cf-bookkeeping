@@ -158,6 +158,7 @@ const TX_LIST_JOINS = `
   LEFT JOIN items i ON t.item_id = i.id
   LEFT JOIN prepaid_cards pc ON t.card_id = pc.id
   LEFT JOIN subscriptions s ON t.subscription_id = s.id
+  LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
 `;
 
 function buildTransactionFilterClause(userId: string, filter: TxFilterInput) {
@@ -643,6 +644,9 @@ transactionsRouter.get('/', async (c) => {
       t.created_at,
       a.name AS account_name,
       COALESCE(a.currency, 'CNY') AS currency,
+      COALESCE(cr.symbol, '¥') AS currency_symbol,
+      COALESCE(cr.rate_to_cny, 1.0) AS rate_to_cny,
+      ROUND(t.amount * COALESCE(cr.rate_to_cny, 1.0)) AS cny_amount,
       da.name AS destination_account_name,
       COALESCE(da.currency, 'CNY') AS destination_currency,
       c.name AS category_name,
@@ -661,11 +665,11 @@ transactionsRouter.get('/', async (c) => {
 
   const { results } = await c.env.DB.prepare(querySql).bind(...params, limit, offset).all<Transaction>();
 
-  // 统计当前筛选条件下的总收支（复用相同 LEFT JOIN 以支持 search 对分类/账户/大件名的过滤）
+  // 统计当前筛选条件下的总收支（按实时汇率折算为 CNY 基准币）
   const sumSql = `
     SELECT 
-      COALESCE(SUM(CASE WHEN t.type = 'expense' THEN t.amount ELSE 0 END), 0) AS total_expense,
-      COALESCE(SUM(CASE WHEN t.type = 'income' THEN t.amount ELSE 0 END), 0) AS total_income,
+      COALESCE(SUM(ROUND(CASE WHEN t.type = 'expense' THEN t.amount * COALESCE(cr.rate_to_cny, 1.0) ELSE 0 END)), 0) AS total_expense,
+      COALESCE(SUM(ROUND(CASE WHEN t.type = 'income' THEN t.amount * COALESCE(cr.rate_to_cny, 1.0) ELSE 0 END)), 0) AS total_income,
       COALESCE(COUNT(*), 0) AS total_count
     ${TX_LIST_JOINS}
     ${whereClause}
