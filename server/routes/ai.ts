@@ -179,98 +179,104 @@ aiRouter.post('/parse-receipt', async (c) => {
 
 // 5. AI 月度财务消费体检与诊断报告
 aiRouter.post('/monthly-diagnosis', async (c) => {
-  const user = c.get('user');
-  const db = c.env.DB;
-  const body = await c.req.json<{ month?: string }>();
-
-  const now = new Date();
-  const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const targetMonth = body.month || currentMonthStr;
-
-  // 1. 汇总该月份收支数据
-  const txSummary = await db
-    .prepare(
-      `SELECT 
-         SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as total_expense,
-         SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as total_income
-       FROM transactions
-       WHERE user_id = ? AND transaction_time LIKE ?`
-    )
-    .bind(user.id, `${targetMonth}%`)
-    .first<any>();
-
-  const totalExpense = txSummary?.total_expense || 0;
-  const totalIncome = txSummary?.total_income || 0;
-  const surplus = totalIncome - totalExpense;
-  const savingsRate = totalIncome > 0 ? (surplus / totalIncome) * 100 : 0;
-
-  // 2. 分类支出排行
-  const catRows = await db
-    .prepare(
-      `SELECT c.name, SUM(t.amount) as total_amount
-       FROM transactions t
-       JOIN categories c ON t.category_id = c.id
-       WHERE t.user_id = ? AND t.type = 'expense' AND t.transaction_time LIKE ?
-       GROUP BY c.id
-       ORDER BY total_amount DESC
-       LIMIT 6`
-    )
-    .bind(user.id, `${targetMonth}%`)
-    .all<any>();
-
-  const categoryBreakdown = (catRows.results || []).map((r: any) => ({
-    name: r.name,
-    amount: r.total_amount,
-    percentage: totalExpense > 0 ? Number(((r.total_amount / totalExpense) * 100).toFixed(1)) : 0,
-  }));
-
-  // 3. 统计在役订阅月开销
-  const subRows = await db
-    .prepare(
-      `SELECT amount, period_type, period_interval 
-       FROM subscriptions 
-       WHERE user_id = ? AND status = 'active'`
-    )
-    .bind(user.id)
-    .all<any>();
-
-  let subMonthlyTotal = 0;
-  for (const s of subRows.results || []) {
-    const interval = Math.max(1, s.period_interval || 1);
-    if (s.period_type === 'monthly') subMonthlyTotal += Math.round(s.amount / interval);
-    else if (s.period_type === 'yearly') subMonthlyTotal += Math.round(s.amount / (12 * interval));
-    else if (s.period_type === 'weekly') subMonthlyTotal += Math.round((s.amount * 52) / (12 * interval));
-    else if (s.period_type === 'quarterly') subMonthlyTotal += Math.round(s.amount / (3 * interval));
-  }
-
-  // 4. 统计在役大件日均成本
-  const itemsRows = await db
-    .prepare(
-      `SELECT i.id, i.price, i.salvage_value, i.purchase_date,
-              COALESCE(SUM(ie.amount), 0) as additional_cost
-       FROM items i
-       LEFT JOIN item_expenses ie ON i.id = ie.item_id
-       WHERE i.user_id = ? AND i.status = 'active'
-       GROUP BY i.id`
-    )
-    .bind(user.id)
-    .all<any>();
-
-  let activeItemsDailyCost = 0;
-  const activeItemsCount = itemsRows.results?.length || 0;
-  const today = new Date();
-
-  for (const item of itemsRows.results || []) {
-    const buyDate = new Date(item.purchase_date);
-    const diffTime = Math.max(1, Math.floor((today.getTime() - buyDate.getTime()) / (1000 * 3600 * 24)) + 1);
-    const netCost = (item.price || 0) + (item.additional_cost || 0) - (item.salvage_value || 0);
-    const daily = netCost / diffTime;
-    activeItemsDailyCost += Math.round(daily);
-  }
-
-  const [aiConfig] = await Promise.all([getUserAiConfig(db, user.id)]);
-
   try {
+    const user = c.get('user');
+    const db = c.env.DB;
+    const body = await c.req.json<{ month?: string }>().catch(() => ({ month: undefined }));
+
+    const now = new Date();
+    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const targetMonth = body.month || currentMonthStr;
+
+    // 1. 汇总该月份收支数据（关联账户汇率折算为 CNY）
+    const txSummary = await db
+      .prepare(
+        `SELECT 
+           COALESCE(SUM(ROUND(CASE WHEN t.type = 'expense' THEN t.amount * COALESCE(cr.rate_to_cny, 1.0) ELSE 0 END)), 0) as total_expense,
+           COALESCE(SUM(ROUND(CASE WHEN t.type = 'income' THEN t.amount * COALESCE(cr.rate_to_cny, 1.0) ELSE 0 END)), 0) as total_income
+         FROM transactions t
+         LEFT JOIN accounts a ON t.account_id = a.id
+         LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
+         WHERE t.user_id = ? AND t.transaction_time LIKE ?`
+      )
+      .bind(user.id, `${targetMonth}%`)
+      .first<{ total_expense: number; total_income: number }>();
+
+    const totalExpense = txSummary?.total_expense || 0;
+    const totalIncome = txSummary?.total_income || 0;
+    const surplus = totalIncome - totalExpense;
+    const savingsRate = totalIncome > 0 ? (surplus / totalIncome) * 100 : 0;
+
+    // 2. 分类支出排行 (LEFT JOIN 兼容未分类开销)
+    const catRows = await db
+      .prepare(
+        `SELECT 
+           COALESCE(c.name, '未分类') AS name, 
+           COALESCE(SUM(ROUND(t.amount * COALESCE(cr.rate_to_cny, 1.0))), 0) as total_amount
+         FROM transactions t
+         LEFT JOIN accounts a ON t.account_id = a.id
+         LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
+         LEFT JOIN categories c ON t.category_id = c.id
+         WHERE t.user_id = ? AND t.type = 'expense' AND t.transaction_time LIKE ?
+         GROUP BY COALESCE(c.id, '__uncategorized__')
+         ORDER BY total_amount DESC
+         LIMIT 6`
+      )
+      .bind(user.id, `${targetMonth}%`)
+      .all<{ name: string; total_amount: number }>();
+
+    const categoryBreakdown = (catRows.results || []).map((r) => ({
+      name: r.name,
+      amount: r.total_amount,
+      percentage: totalExpense > 0 ? Number(((r.total_amount / totalExpense) * 100).toFixed(1)) : 0,
+    }));
+
+    // 3. 统计在役订阅月开销
+    const subRows = await db
+      .prepare(
+        `SELECT amount, period_type, period_interval 
+         FROM subscriptions 
+         WHERE user_id = ? AND status = 'active'`
+      )
+      .bind(user.id)
+      .all<{ amount: number; period_type: string; period_interval: number }>();
+
+    let subMonthlyTotal = 0;
+    for (const s of subRows.results || []) {
+      const interval = Math.max(1, s.period_interval || 1);
+      if (s.period_type === 'monthly') subMonthlyTotal += Math.round(s.amount / interval);
+      else if (s.period_type === 'yearly') subMonthlyTotal += Math.round(s.amount / (12 * interval));
+      else if (s.period_type === 'weekly') subMonthlyTotal += Math.round((s.amount * 52) / (12 * interval));
+      else if (s.period_type === 'quarterly') subMonthlyTotal += Math.round(s.amount / (3 * interval));
+    }
+
+    // 4. 统计在役大件日均成本 (修正 resale_price 字段与 status = 'using')
+    const itemsRows = await db
+      .prepare(
+        `SELECT i.id, i.price, COALESCE(i.resale_price, 0) AS resale_price, i.purchase_date,
+                COALESCE(SUM(ie.amount), 0) as additional_cost
+         FROM items i
+         LEFT JOIN item_expenses ie ON i.id = ie.item_id
+         WHERE i.user_id = ? AND i.status = 'using'
+         GROUP BY i.id`
+      )
+      .bind(user.id)
+      .all<{ id: string; price: number; resale_price: number; purchase_date: string; additional_cost: number }>();
+
+    let activeItemsDailyCost = 0;
+    const activeItemsCount = itemsRows.results?.length || 0;
+    const today = new Date();
+
+    for (const item of itemsRows.results || []) {
+      const buyDate = new Date(item.purchase_date);
+      const diffTime = Math.max(1, Math.floor((today.getTime() - buyDate.getTime()) / (1000 * 3600 * 24)) + 1);
+      const netCost = (item.price || 0) + (item.additional_cost || 0) - (item.resale_price || 0);
+      const daily = netCost / diffTime;
+      activeItemsDailyCost += Math.round(daily);
+    }
+
+    const aiConfig = await getUserAiConfig(db, user.id);
+
     const diagnosis = await generateAiMonthlyDiagnosis(c.env, aiConfig, targetMonth, {
       total_income: totalIncome,
       total_expense: totalExpense,
@@ -284,6 +290,7 @@ aiRouter.post('/monthly-diagnosis', async (c) => {
 
     return c.json({ diagnosis });
   } catch (err: any) {
+    console.error('generateAiMonthlyDiagnosis fatal error:', err);
     return c.json({ error: err.message || '生成财务体检报告失败' }, 500);
   }
 });

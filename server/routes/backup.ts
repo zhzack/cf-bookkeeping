@@ -207,37 +207,35 @@ backupRouter.post('/restore-full', async (c) => {
     stmts.push(
       db
         .prepare(
-          `INSERT INTO items (id, user_id, name, category, price, purchase_date, status, salvage_value, expected_lifespan_days, warranty_deadline, location, remark, wishlist_cooling_days, wishlist_created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO items (id, user_id, name, category, price, purchase_date, status, resale_price, expected_days, warranty_date, location, remark, cooling_days)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              name = excluded.name,
              category = excluded.category,
              price = excluded.price,
              purchase_date = excluded.purchase_date,
              status = excluded.status,
-             salvage_value = excluded.salvage_value,
-             expected_lifespan_days = excluded.expected_lifespan_days,
-             warranty_deadline = excluded.warranty_deadline,
+             resale_price = excluded.resale_price,
+             expected_days = excluded.expected_days,
+             warranty_date = excluded.warranty_date,
              location = excluded.location,
              remark = excluded.remark,
-             wishlist_cooling_days = excluded.wishlist_cooling_days,
-             wishlist_created_at = excluded.wishlist_created_at`
+             cooling_days = excluded.cooling_days`
         )
         .bind(
           it.id,
           user.id,
           it.name,
-          it.category || '数码电器',
+          it.category || '数码科技',
           it.price || 0,
           it.purchase_date || new Date().toISOString().slice(0, 10),
-          it.status || 'active',
-          it.salvage_value || 0,
-          it.expected_lifespan_days || 1095,
-          it.warranty_deadline || null,
+          it.status || 'using',
+          it.resale_price || it.salvage_value || 0,
+          it.expected_days || it.expected_lifespan_days || 1095,
+          it.warranty_date || it.warranty_deadline || null,
           it.location || null,
           it.remark || null,
-          it.wishlist_cooling_days || null,
-          it.wishlist_created_at || null
+          it.cooling_days || it.wishlist_cooling_days || 7
         )
     );
   }
@@ -575,27 +573,27 @@ backupRouter.get('/export-csv', async (c) => {
     for (const it of rows.results || []) {
       const buyDate = new Date(it.purchase_date);
       const days = Math.max(1, Math.floor((today.getTime() - buyDate.getTime()) / (1000 * 3600 * 24)) + 1);
-      const netAmount = (it.price || 0) + (it.total_extra || 0) - (it.salvage_value || 0);
+      const netAmount = (it.price || 0) + (it.total_extra || 0) - (it.resale_price || it.salvage_value || 0);
       const dailyYuan = (netAmount / days / 100).toFixed(2);
 
       let statusLabel = '服役在用中';
       if (it.status === 'idle') statusLabel = '闲置吃灰';
-      else if (it.status === 'broken') statusLabel = '损坏淘汰';
-      else if (it.status === 'resold') statusLabel = '已出二手';
+      else if (it.status === 'retired') statusLabel = '损坏淘汰';
+      else if (it.status === 'sold') statusLabel = '已出二手';
       else if (it.status === 'wishlist') statusLabel = '冷静期心愿单';
 
       csvContent += toCsvLine([
         it.name,
         statusLabel,
-        it.category || '数码电器',
+        it.category || '数码科技',
         it.purchase_date,
         (it.price / 100).toFixed(2),
         (it.total_extra / 100).toFixed(2),
-        (it.salvage_value / 100).toFixed(2),
+        ((it.resale_price || 0) / 100).toFixed(2),
         (netAmount / 100).toFixed(2),
         days,
         dailyYuan,
-        it.warranty_deadline || '',
+        it.warranty_date || '',
         it.location || '',
         it.remark || '',
       ]);
