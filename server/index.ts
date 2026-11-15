@@ -15,12 +15,18 @@ import { aiRouter } from './routes/ai';
 import { backupRouter } from './routes/backup';
 import { currencyRouter } from './routes/currency';
 import { budgetsRouter } from './routes/budgets';
+import { fetchLiveExchangeRates } from './exchangeRate';
 
 const app = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
 
-// 允许跨域（方便本地开发调试）
+// 安全收紧跨域策略（仅放行线上生产域名与本地开发环境）
 app.use('*', cors({
-  origin: (origin) => origin,
+  origin: (origin) => {
+    if (!origin) return origin;
+    if (origin === 'https://book.b1uegrey.xyz') return origin;
+    if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return origin;
+    return '';
+  },
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
@@ -89,7 +95,22 @@ app.get('*', async (c) => {
 export default {
   fetch: app.fetch,
   async scheduled(controller: any, env: Env, ctx: any) {
-    const task = processDueSubscriptions(env.DB);
+    const runCronTasks = async () => {
+      // 1. 自动处理到期周期性订阅账单
+      try {
+        await processDueSubscriptions(env.DB);
+      } catch (err) {
+        console.error('自动处理到期订阅账单失败:', err);
+      }
+      // 2. 每日自动更新全球主流外汇牌价
+      try {
+        await fetchLiveExchangeRates(env.DB);
+      } catch (err) {
+        console.error('定时同步外汇牌价失败:', err);
+      }
+    };
+
+    const task = runCronTasks();
     if (ctx && typeof ctx.waitUntil === 'function') {
       ctx.waitUntil(task);
     } else {

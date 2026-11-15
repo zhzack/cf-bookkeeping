@@ -11,6 +11,9 @@ export async function fetchApi<T = any>(url: string, options: RequestInit = {}):
   const data = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
 
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== 'undefined' && !url.includes('/api/auth/me') && !url.includes('/api/auth/login')) {
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+    }
     throw new Error(data?.error || `网络请求错误 (${res.status})`);
   }
 

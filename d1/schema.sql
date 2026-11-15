@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 -- 索引以加速查询
 CREATE INDEX IF NOT EXISTS idx_trans_user_time ON transactions(user_id, transaction_time DESC);
 CREATE INDEX IF NOT EXISTS idx_trans_account ON transactions(account_id);
+CREATE INDEX IF NOT EXISTS idx_trans_dest_account ON transactions(destination_account_id);
 CREATE INDEX IF NOT EXISTS idx_trans_category ON transactions(category_id);
 CREATE INDEX IF NOT EXISTS idx_trans_item ON transactions(item_id);
 CREATE INDEX IF NOT EXISTS idx_trans_card ON transactions(card_id);

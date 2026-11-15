@@ -22,9 +22,6 @@
 	"ai": {
 		"binding": "AI"
 	},
-	"vars": {
-		"JWT_SECRET": "cf-bookkeeping-production-jwt-secret-key-2026"
-	},
 	"triggers": {
 		"crons": [
 			"0 1 * * *"

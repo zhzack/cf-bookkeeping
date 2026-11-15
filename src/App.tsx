@@ -24,6 +24,7 @@ import {
   setDisableAllFeatureTips,
 } from './data/userGuide';
 import { TransactionsView } from './views/TransactionsView';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 // 懒加载各功能视图与弹窗（路由级按需代码拆分，大幅缩减首屏加载时间）
 const ItemsView = lazy(() => import('./views/ItemsView').then((m) => ({ default: m.ItemsView })));
@@ -173,6 +174,14 @@ export function App() {
 
   useEffect(() => {
     checkStatus();
+
+    const handleUnauthorized = () => {
+      setUser(null);
+    };
+    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    return () => {
+      window.removeEventListener('auth:unauthorized', handleUnauthorized);
+    };
   }, []);
 
   // 2. 加载基础账户和分类数据
@@ -502,8 +511,9 @@ export function App() {
           />
         )}
 
-        <Suspense fallback={<ViewSkeleton />}>
-          {activeTab === 'items' && (
+        <ErrorBoundary fallbackTitle="页面视图加载异常">
+          <Suspense fallback={<ViewSkeleton />}>
+            {activeTab === 'items' && (
             <ItemsView
               onOpenAddItem={(isWishlist = false) => {
                 setIsWishlistDefault(isWishlist);
@@ -608,6 +618,7 @@ export function App() {
             />
           )}
         </Suspense>
+      </ErrorBoundary>
       </main>
 
       {/* 移动端底部 Tab 导航栏 */}
@@ -707,7 +718,8 @@ export function App() {
         </button>
       </div>
 
-      <Suspense fallback={null}>
+      <ErrorBoundary fallbackTitle="功能弹窗加载异常">
+        <Suspense fallback={null}>
         {/* 交易弹窗 (新增 / 编辑) */}
         {isTxModalOpen && (
           <TransactionModal
@@ -959,6 +971,7 @@ export function App() {
           />
         )}
       </Suspense>
+      </ErrorBoundary>
     </div>
   );
 }
