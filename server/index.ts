@@ -65,8 +65,12 @@ app.get('*', async (c) => {
     const url = new URL(c.req.url);
     const contentType = res.headers.get('content-type') || '';
 
-    // HTML 页面绝不缓存，确保每次部署用户第一时间拿到最新的 index.html
-    if (contentType.includes('text/html')) {
+    // HTML 页面与 PWA Service Worker / Manifest 绝不长缓存，确保每次部署用户第一时间拿到最新版本
+    if (
+      contentType.includes('text/html') ||
+      url.pathname === '/sw.js' ||
+      url.pathname.endsWith('manifest.webmanifest')
+    ) {
       const headers = new Headers(res.headers);
       headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
       headers.set('Pragma', 'no-cache');

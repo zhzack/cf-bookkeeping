@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#4338ca" />
+    </linearGradient>
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#1e1b4b" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <!-- 背景圆角矩形 -->
+  <rect width="512" height="512" rx="128" fill="url(#bg)" />
+
+  <!-- 主体钱包图标 -->
+  <g filter="url(#shadow)">
+    <!-- 顶部微露的账单/卡片 -->
+    <rect x="176" y="112" width="160" height="90" rx="16" fill="url(#cardGrad)" transform="rotate(-6 256 157)" />
+    <rect x="160" y="132" width="192" height="110" rx="20" fill="#ffffff" fill-opacity="0.9" />
+    <rect x="184" y="156" width="96" height="12" rx="6" fill="#cbd5e1" />
+    <rect x="184" y="180" width="64" height="12" rx="6" fill="#94a3b8" />
+
+    <!-- 钱包皮夹外壳 -->
+    <rect x="106" y="180" width="300" height="210" rx="36" fill="#1e1b4b" fill-opacity="0.15" />
+    <rect x="106" y="170" width="300" height="210" rx="36" fill="#ffffff" />
+
+    <!-- 钱包内衬与卡扣细节 -->
+    <path d="M106 240 Q256 260 406 240 L406 344 A36 36 0 0 1 370 380 L142 380 A36 36 0 0 1 106 344 Z" fill="#f8fafc" />
+    
+    <!-- 闭合卡扣搭扣 -->
+    <rect x="330" y="246" width="86" height="60" rx="18" fill="#4f46e5" />
+    <circle cx="362" cy="276" r="10" fill="#fbbf24" />
+  </g>
+</svg>
