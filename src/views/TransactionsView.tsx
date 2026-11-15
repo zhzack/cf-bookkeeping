@@ -893,7 +893,7 @@ export const TransactionsView: React.FC<Props> = ({
                           )}
 
                           <span
-                            className={`text-sm sm:text-base font-bold ${
+                            className={`text-sm sm:text-base font-bold flex items-center gap-1 ${
                               isExpense
                                 ? 'text-rose-500'
                                 : isIncome
@@ -901,8 +901,15 @@ export const TransactionsView: React.FC<Props> = ({
                                 : 'text-indigo-600'
                             }`}
                           >
-                            {isExpense ? '-' : isIncome ? '+' : ''}
-                            {formatCurrency(tx.amount)}
+                            <span>
+                              {isExpense ? '-' : isIncome ? '+' : ''}
+                              {formatCurrency(tx.amount, false, tx.currency || 'CNY')}
+                            </span>
+                            {tx.type === 'transfer' && tx.target_amount && (
+                              <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded-md">
+                                → {formatCurrency(tx.target_amount, false, tx.destination_currency || 'CNY')}
+                              </span>
+                            )}
                           </span>
 
                           <button

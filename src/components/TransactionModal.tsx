@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, Check, Package, CreditCard, Layers, Tags, Wand2 } from 'lucide-react';
-import { fetchApi } from '../api';
+import { fetchApi, getCurrencySymbol } from '../api';
 import { Account, AutoRule, Category, Transaction, TransactionPhoto } from '../types';
 import { DynamicIcon } from './DynamicIcon';
 import { PhotoPicker } from './PhotoPicker';
@@ -37,6 +37,8 @@ export const TransactionModal: React.FC<Props> = ({
   const [amountStr, setAmountStr] = useState('');
   const [accountId, setAccountId] = useState('');
   const [destinationAccountId, setDestinationAccountId] = useState('');
+  const [targetAmountStr, setTargetAmountStr] = useState('');
+  const [exchangeRateStr, setExchangeRateStr] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [time, setTime] = useState('');
   const [remark, setRemark] = useState('');
@@ -108,6 +110,12 @@ export const TransactionModal: React.FC<Props> = ({
       setAmountStr((initialData.amount / 100).toString());
       setAccountId(initialData.account_id);
       setDestinationAccountId(initialData.destination_account_id || '');
+      setTargetAmountStr(
+        initialData.target_amount ? (initialData.target_amount / 100).toString() : ''
+      );
+      setExchangeRateStr(
+        initialData.exchange_rate ? String(initialData.exchange_rate) : ''
+      );
       setCategoryId(initialData.category_id || '');
       setTime(initialData.transaction_time.slice(0, 16));
       setRemark(initialData.remark || '');
@@ -138,6 +146,8 @@ export const TransactionModal: React.FC<Props> = ({
       setAmountStr('');
       setAccountId(accounts[0]?.id || '');
       setDestinationAccountId(accounts[1]?.id || '');
+      setTargetAmountStr('');
+      setExchangeRateStr('');
       setTime(localNow);
       setRemark('');
       setScene('');
@@ -243,6 +253,27 @@ export const TransactionModal: React.FC<Props> = ({
     }
   };
 
+  const sourceAccount = accounts.find((a) => a.id === accountId);
+  const destAccount = accounts.find((a) => a.id === destinationAccountId);
+  const sourceCurrency = sourceAccount?.currency || 'CNY';
+  const destCurrency = destAccount?.currency || 'CNY';
+  const isCrossCurrencyTransfer =
+    type === 'transfer' && sourceCurrency.toUpperCase() !== destCurrency.toUpperCase();
+
+  // 当跨币种转账账户变化时，根据系统汇率推导默认汇率与目标金额
+  useEffect(() => {
+    if (isCrossCurrencyTransfer && !initialData) {
+      const srcRate = sourceAccount?.rate_to_cny || 1.0;
+      const dstRate = destAccount?.rate_to_cny || 1.0;
+      const defaultRate = Math.round((srcRate / dstRate) * 10000) / 10000;
+      setExchangeRateStr(defaultRate.toString());
+      const numAmount = parseFloat(amountStr);
+      if (!isNaN(numAmount) && numAmount > 0) {
+        setTargetAmountStr((numAmount * defaultRate).toFixed(2));
+      }
+    }
+  }, [isCrossCurrencyTransfer, accountId, destinationAccountId]);
+
   const ruleSuggestion = useMemo(() => {
     if (type === 'transfer' || !remark.trim() || rules.length === 0) return null;
     const match = matchAutoRules(rules, {
@@ -344,6 +375,23 @@ export const TransactionModal: React.FC<Props> = ({
       return;
     }
 
+    let targetCents: number | null = null;
+    let exchangeRateNum: number | null = null;
+    if (isCrossCurrencyTransfer) {
+      const tgt = parseFloat(targetAmountStr);
+      if (isNaN(tgt) || tgt <= 0) {
+        setError(`请输入转入账户实收金额 (${destCurrency})`);
+        return;
+      }
+      targetCents = Math.round(tgt * 100);
+      const exRate = parseFloat(exchangeRateStr);
+      if (!isNaN(exRate) && exRate > 0) {
+        exchangeRateNum = exRate;
+      } else {
+        exchangeRateNum = tgt / (cents / 100);
+      }
+    }
+
     setLoading(true);
     try {
       const basePayload = {
@@ -351,6 +399,8 @@ export const TransactionModal: React.FC<Props> = ({
         amount: cents,
         account_id: accountId,
         destination_account_id: type === 'transfer' ? destinationAccountId : null,
+        target_amount: targetCents,
+        exchange_rate: exchangeRateNum,
         category_id: type !== 'transfer' ? categoryId : null,
         transaction_time: time.replace('T', ' ') + ':00',
         remark: remark.trim(),
@@ -472,7 +522,7 @@ export const TransactionModal: React.FC<Props> = ({
             <span className="text-sm font-semibold text-slate-500">金额</span>
             <div className="flex items-center gap-1">
               <span className={`text-2xl font-bold ${type === 'expense' ? 'text-rose-500' : type === 'income' ? 'text-emerald-500' : 'text-indigo-600'}`}>
-                ¥
+                {getCurrencySymbol(sourceAccount?.currency)}
               </span>
               <input
                 type="number"
@@ -482,7 +532,17 @@ export const TransactionModal: React.FC<Props> = ({
                 autoFocus
                 placeholder="0.00"
                 value={amountStr}
-                onChange={(e) => setAmountStr(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setAmountStr(val);
+                  if (isCrossCurrencyTransfer) {
+                    const rate = parseFloat(exchangeRateStr);
+                    const src = parseFloat(val);
+                    if (!isNaN(rate) && rate > 0 && !isNaN(src) && src > 0) {
+                      setTargetAmountStr((src * rate).toFixed(2));
+                    }
+                  }
+                }}
                 className="w-44 text-right text-3xl font-bold bg-transparent text-slate-800 focus:outline-none placeholder:text-slate-300"
               />
             </div>
@@ -627,36 +687,98 @@ export const TransactionModal: React.FC<Props> = ({
 
           {/* Account Selection */}
           {type === 'transfer' ? (
-            <div className="grid grid-cols-2 gap-3 items-center">
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">转出账户</label>
-                <select
-                  value={accountId}
-                  onChange={(e) => setAccountId(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                >
-                  {accounts.map((acc) => (
-                    <option key={acc.id} value={acc.id}>
-                      {acc.name}
-                    </option>
-                  ))}
-                </select>
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3 items-center">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">转出账户</label>
+                  <select
+                    value={accountId}
+                    onChange={(e) => setAccountId(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  >
+                    {accounts.map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} {acc.currency && acc.currency !== 'CNY' ? `(${acc.currency})` : '(CNY)'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">转入账户</label>
+                  <select
+                    value={destinationAccountId}
+                    onChange={(e) => setDestinationAccountId(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  >
+                    {accounts.map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} {acc.currency && acc.currency !== 'CNY' ? `(${acc.currency})` : '(CNY)'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">转入账户</label>
-                <select
-                  value={destinationAccountId}
-                  onChange={(e) => setDestinationAccountId(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                >
-                  {accounts.map((acc) => (
-                    <option key={acc.id} value={acc.id}>
-                      {acc.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {isCrossCurrencyTransfer && (
+                <div className="p-3.5 bg-amber-50/70 border border-amber-200/80 rounded-2xl space-y-2.5">
+                  <div className="flex items-center justify-between text-xs font-bold text-amber-900">
+                    <span className="flex items-center gap-1.5">
+                      <span>💱</span>
+                      <span>跨币种换汇转账</span>
+                    </span>
+                    <span className="text-[11px] font-mono text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-md font-semibold">
+                      {sourceCurrency} → {destCurrency}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-amber-900 mb-1">
+                        实收转入金额 ({getCurrencySymbol(destCurrency)})
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={targetAmountStr}
+                        onChange={(e) => {
+                          const tgtStr = e.target.value;
+                          setTargetAmountStr(tgtStr);
+                          const tgt = parseFloat(tgtStr);
+                          const src = parseFloat(amountStr);
+                          if (!isNaN(tgt) && tgt > 0 && !isNaN(src) && src > 0) {
+                            setExchangeRateStr((tgt / src).toFixed(4));
+                          }
+                        }}
+                        className="w-full px-2.5 py-1.5 bg-white border border-amber-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-amber-900 mb-1">
+                        折算汇率 (1 {sourceCurrency} =)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        placeholder="汇率"
+                        value={exchangeRateStr}
+                        onChange={(e) => {
+                          const rateStr = e.target.value;
+                          setExchangeRateStr(rateStr);
+                          const rate = parseFloat(rateStr);
+                          const src = parseFloat(amountStr);
+                          if (!isNaN(rate) && rate > 0 && !isNaN(src) && src > 0) {
+                            setTargetAmountStr((src * rate).toFixed(2));
+                          }
+                        }}
+                        className="w-full px-2.5 py-1.5 bg-white border border-amber-200 rounded-xl text-xs font-mono focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div>

@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     subscription_id TEXT DEFAULT NULL, -- 关联的订阅/周期性记账 ID
     source TEXT DEFAULT 'manual', -- 来源: 'manual' | 'wechat' | 'alipay' | 'shortcut' | 'item' | 'prepaid_card' | 'subscription'
     external_id TEXT DEFAULT NULL, -- 外部账单单号/幂等去重键（如 wx:xxx / ali:xxx）
+    target_amount INTEGER DEFAULT NULL, -- 跨币种转账时转入账户实收金额 (单位: 目标货币分)
+    exchange_rate REAL DEFAULT NULL, -- 跨币种转账或结算汇率 (目标币种 / 源币种)
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -286,6 +288,16 @@ CREATE TABLE IF NOT EXISTS user_ai_configs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_ai_config ON user_ai_configs(user_id);
+
+-- 全球主流外汇与实时汇率表
+CREATE TABLE IF NOT EXISTS currency_rates (
+    code TEXT PRIMARY KEY,                   -- 货币代码: 'CNY', 'USD', 'HKD', 'EUR', 'GBP', 'JPY', 'SGD', 'AUD', 'CAD', 'THB', 'KRW'
+    name TEXT NOT NULL,                      -- 货币名称: '人民币', '美元', '港币' 等
+    symbol TEXT NOT NULL,                    -- 货币符号: '¥', '$', 'HK$', '€', '£', 'JP¥', 'S$' 等
+    rate_to_cny REAL NOT NULL DEFAULT 1.0,  -- 1 单位外币兑换人民币汇率 (基准货币为 CNY)
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 
 
 

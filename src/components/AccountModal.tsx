@@ -19,9 +19,26 @@ const ACCOUNT_TYPES = [
   { type: 'other', name: '其他', color: '#8C8C8C' },
 ];
 
+const CURRENCY_OPTIONS = [
+  { code: 'CNY', name: '人民币 (CNY)', symbol: '¥' },
+  { code: 'USD', name: '美元 (USD)', symbol: '$' },
+  { code: 'HKD', name: '港币 (HKD)', symbol: 'HK$' },
+  { code: 'EUR', name: '欧元 (EUR)', symbol: '€' },
+  { code: 'GBP', name: '英镑 (GBP)', symbol: '£' },
+  { code: 'JPY', name: '日元 (JPY)', symbol: 'JP¥' },
+  { code: 'SGD', name: '新加坡元 (SGD)', symbol: 'S$' },
+  { code: 'AUD', name: '澳元 (AUD)', symbol: 'A$' },
+  { code: 'CAD', name: '加元 (CAD)', symbol: 'C$' },
+  { code: 'THB', name: '泰铢 (THB)', symbol: '฿' },
+  { code: 'KRW', name: '韩元 (KRW)', symbol: '₩' },
+  { code: 'MOP', name: '澳门元 (MOP)', symbol: 'MOP$' },
+  { code: 'TWD', name: '新台币 (TWD)', symbol: 'NT$' },
+];
+
 export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, account }) => {
   const [name, setName] = useState('');
   const [type, setType] = useState('bank');
+  const [currency, setCurrency] = useState('CNY');
   const [initialBalanceStr, setInitialBalanceStr] = useState('0');
   const [color, setColor] = useState('#1677FF');
   const [loading, setLoading] = useState(false);
@@ -31,11 +48,13 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
     if (account) {
       setName(account.name);
       setType(account.type);
+      setCurrency(account.currency || 'CNY');
       setInitialBalanceStr((account.initial_balance / 100).toString());
       setColor(account.color || '#1677FF');
     } else {
       setName('');
       setType('bank');
+      setCurrency('CNY');
       setInitialBalanceStr('0');
       setColor('#1677FF');
     }
@@ -62,6 +81,7 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
       const payload = {
         name: name.trim(),
         type,
+        currency,
         initial_balance: Math.round(initBal * 100),
         color,
         icon: type,
@@ -156,17 +176,34 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1">
-              初始金额 (元，若是信用卡欠款可填负数)
-            </label>
-            <input
-              type="number"
-              step="0.01"
-              value={initialBalanceStr}
-              onChange={(e) => setInitialBalanceStr(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">账户币种</label>
+              <select
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              >
+                {CURRENCY_OPTIONS.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">
+                初始金额 ({CURRENCY_OPTIONS.find((c) => c.code === currency)?.symbol || '¥'})
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="0.00"
+                value={initialBalanceStr}
+                onChange={(e) => setInitialBalanceStr(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              />
+            </div>
           </div>
 
           <div className="flex gap-2 pt-2">

@@ -17,15 +17,40 @@ export async function fetchApi<T = any>(url: string, options: RequestInit = {}):
   return data as T;
 }
 
-// 格式化金额：分 -> 元 (带千分位)
-export function formatCurrency(cents: number, showSign: boolean = false): string {
-  const yuan = (cents / 100).toFixed(2);
-  const parts = yuan.split('.');
+export const CURRENCY_SYMBOLS: Record<string, string> = {
+  CNY: '¥',
+  USD: '$',
+  HKD: 'HK$',
+  EUR: '€',
+  GBP: '£',
+  JPY: 'JP¥',
+  SGD: 'S$',
+  AUD: 'A$',
+  CAD: 'C$',
+  THB: '฿',
+  KRW: '₩',
+  MOP: 'MOP$',
+  TWD: 'NT$',
+  MYR: 'RM',
+  CHF: 'CHF',
+  NZD: 'NZ$',
+};
+
+export function getCurrencySymbol(currencyCode?: string): string {
+  if (!currencyCode) return '¥';
+  return CURRENCY_SYMBOLS[currencyCode.toUpperCase()] || currencyCode;
+}
+
+// 格式化金额：分 -> 元 (带千分位)，支持多币种符号
+export function formatCurrency(cents: number, showSign: boolean = false, currencyCode: string = 'CNY'): string {
+  const symbol = getCurrencySymbol(currencyCode);
+  const val = (cents / 100).toFixed(2);
+  const parts = val.split('.');
   parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const formatted = parts.join('.');
-  if (showSign && cents > 0) return `+¥${formatted}`;
-  if (showSign && cents < 0) return `-¥${formatted.replace('-', '')}`;
-  return `¥${formatted}`;
+  if (showSign && cents > 0) return `+${symbol}${formatted}`;
+  if (showSign && cents < 0) return `-${symbol}${formatted.replace('-', '')}`;
+  return `${symbol}${formatted}`;
 }
 
 // 格式化日期时间

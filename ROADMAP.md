@@ -26,6 +26,7 @@
 - [x] **v1.7 周期记账与订阅管理中心 (Recurring & Subscriptions Hub)**：多周期灵活订阅、Cloudflare Workers Cron 定时调度与请求端自愈双引擎、月度/年化现金流折算、7天到期预警与手动入账队列。
 - [x] **v1.8 AI 智能交互与小票记账 (Workers AI / LLM)**：自然语言与语音记账、消费小票拍照 OCR 视觉提取、AI 月度财务体检诊断报告、Cloudflare Workers AI 与自定义外部大模型双模切换。
 - [x] **v1.9 灾备还原与多格式导入导出 (Data Portability)**：全量 JSON 备份与增量/覆盖换库无损还原、带 UTF-8 BOM 的规范 Excel/CSV 报表导出、钱迹/随手记/鲨鱼记账等第三方记账应用搬家迁移。
+- [x] **v1.10 多币种与外汇钱包管理 (Multi-Currency & FX Hub)**：16+ 全球主流法定货币（CNY, USD, HKD, EUR, GBP, JPY, SGD, AUD, CAD 等）、免 API 密钥公开牌价引擎一键同步、汇率自定义微调、跨币种换汇转账（双币种双向自动折算）、账户原生余额与 CNY 折合双重透视、总资产与净资产全币种精准并表。
 
 ---
 

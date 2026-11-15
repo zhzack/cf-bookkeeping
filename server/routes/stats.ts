@@ -306,31 +306,43 @@ statsRouter.get('/overview', async (c) => {
   const startTime = `${currRange.periodStart} 00:00:00`;
   const endTime = `${currRange.periodLastDay} 23:59:59`;
 
-  // 1. 各账户当前余额计算
+  // 1. 各账户当前余额计算（多币种折算基准货币 CNY 资产与净资产）
   const accountsSql = `
     SELECT 
       a.id,
       a.name,
       a.type,
+      COALESCE(a.currency, 'CNY') AS currency,
+      COALESCE(cr.rate_to_cny, 1.0) AS rate_to_cny,
       (
         a.initial_balance 
         + COALESCE((SELECT SUM(CASE WHEN t.type = 'income' THEN t.amount WHEN t.type = 'expense' THEN -t.amount ELSE 0 END) FROM transactions t WHERE t.account_id = a.id), 0)
-        + COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.destination_account_id = a.id AND t.type = 'transfer'), 0)
+        + COALESCE((SELECT SUM(COALESCE(t.target_amount, t.amount)) FROM transactions t WHERE t.destination_account_id = a.id AND t.type = 'transfer'), 0)
         - COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.account_id = a.id AND t.type = 'transfer'), 0)
       ) AS balance
     FROM accounts a
+    LEFT JOIN currency_rates cr ON cr.code = COALESCE(a.currency, 'CNY')
     WHERE a.user_id = ?
   `;
-  const { results: accountBalances } = await c.env.DB.prepare(accountsSql).bind(user.id).all<{ id: string; name: string; type: string; balance: number }>();
+  const { results: accountBalances } = await c.env.DB.prepare(accountsSql).bind(user.id).all<{
+    id: string;
+    name: string;
+    type: string;
+    currency: string;
+    rate_to_cny: number;
+    balance: number;
+  }>();
 
   let totalAssets = 0;
   let totalLiabilities = 0;
 
-  for (const acc of accountBalances) {
-    if (acc.balance >= 0) {
-      totalAssets += acc.balance;
+  for (const acc of accountBalances || []) {
+    const rate = acc.rate_to_cny || 1.0;
+    const cnyBalance = Math.round(acc.balance * rate);
+    if (cnyBalance >= 0) {
+      totalAssets += cnyBalance;
     } else {
-      totalLiabilities += Math.abs(acc.balance);
+      totalLiabilities += Math.abs(cnyBalance);
     }
   }
 

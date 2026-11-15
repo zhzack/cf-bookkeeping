@@ -112,10 +112,12 @@
   ```json
   {
     "type": "expense", // 'expense' | 'income' | 'transfer'
-    "amount": 3500, // 单位：分 (正整数)
+    "amount": 3500, // 单位：分 (正整数，转出币种金额)
     "account_id": "acc_xxxx",
     "category_id": "cat_xxxx", // 支出或收入时传入
     "destination_account_id": null, // 仅转账时传入
+    "target_amount": null, // 可选：跨币种换汇转账时转入账户实收金额 (单位：目标币种分)
+    "exchange_rate": null, // 可选：跨币种换汇折算汇率
     "transaction_time": "2026-11-12 12:30:00",
     "remark": "肯德基午餐",
     "amortize_days": null, // 可选，>1 表示固定开销按天分摊（如 30/90/365）
@@ -219,7 +221,7 @@
 
 ### 3. 账户管理接口 (Accounts)
 
-#### 3.1 获取所有账户列表 (包含实时动态余额)
+#### 3.1 获取所有账户列表 (包含实时动态余额与多币种折算)
 - **接口**：`GET /api/accounts`
 - **需鉴权**
 - **返回示例**：
@@ -228,11 +230,16 @@
     "accounts": [
       {
         "id": "acc_xxxx",
-        "name": "微信钱包",
-        "type": "wechat",
-        "initial_balance": 0,
-        "current_balance": 52800, // 实时计算余额：528.00元
-        "color": "#07C160"
+        "name": "香港汇丰银行",
+        "type": "bank",
+        "currency": "HKD",
+        "currency_symbol": "HK$",
+        "currency_name": "港币",
+        "rate_to_cny": 0.93,
+        "initial_balance": 100000,
+        "current_balance": 125000, // 账户原生币种实时余额：1,250.00 HKD
+        "cny_current_balance": 116250, // 自动折合人民币：1,162.50 CNY
+        "color": "#FA541C"
       }
     ]
   }
@@ -241,6 +248,16 @@
 #### 3.2 创建账户
 - **接口**：`POST /api/accounts`
 - **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "name": "美股入金账户",
+    "type": "bank",
+    "currency": "USD", // 可选：'CNY' | 'USD' | 'HKD' | 'EUR' | 'GBP' | 'JPY' | 'SGD' | 'AUD' | 'CAD' | 'THB' 等
+    "initial_balance": 50000, // 单位：美分 (500.00 USD)
+    "color": "#3B82F6"
+  }
+  ```
 
 ---
 
@@ -883,6 +900,60 @@
   }
   ```
 - **说明**：根据用户偏好，若账单中出现新账户或新分类，系统会自动建立该账户与分类并完成批量关联入库。
+
+---
+
+### 12. 外汇汇率中心与多币种接口 (Currency & Exchange Rates)
+
+#### 12.1 获取全币种汇率牌价
+- **接口**：`GET /api/currency/rates`
+- **需鉴权**
+- **返回示例**：
+  ```json
+  {
+    "rates": [
+      {
+        "code": "USD",
+        "name": "美元",
+        "symbol": "$",
+        "rate_to_cny": 7.24,
+        "updated_at": "2026-11-15 00:49:08"
+      },
+      {
+        "code": "HKD",
+        "name": "港币",
+        "symbol": "HK$",
+        "rate_to_cny": 0.93,
+        "updated_at": "2026-11-15 00:49:08"
+      }
+    ]
+  }
+  ```
+
+#### 12.2 一键同步最新公开实时汇率
+- **接口**：`POST /api/currency/refresh`
+- **需鉴权**
+- **说明**：后端直连全球央行/市场公开牌价接口，免 API 密钥，实时抓取并刷新数据库所有外币汇率。
+- **返回示例**：
+  ```json
+  {
+    "message": "汇率已更新至最新牌价",
+    "updated_count": 16,
+    "rates": [...]
+  }
+  ```
+
+#### 12.3 自定义设定指定币种汇率
+- **接口**：`PUT /api/currency/rate/:code`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "rate_to_cny": 7.285
+  }
+  ```
+- **说明**：支持用户针对特定换汇成本或锁汇需求，覆盖系统牌价设定固定折算汇率。
+
 
 
 

@@ -637,9 +637,13 @@ transactionsRouter.get('/', async (c) => {
       t.subscription_id,
       t.source,
       t.external_id,
+      t.target_amount,
+      t.exchange_rate,
       t.created_at,
       a.name AS account_name,
+      COALESCE(a.currency, 'CNY') AS currency,
       da.name AS destination_account_name,
+      COALESCE(da.currency, 'CNY') AS destination_currency,
       c.name AS category_name,
       c.icon AS category_icon,
       c.color AS category_color,
@@ -723,6 +727,8 @@ transactionsRouter.post('/', async (c) => {
     photos,
     convert_to_item,
     item_details,
+    target_amount,
+    exchange_rate,
   } = body;
 
   if (!type || !['expense', 'income', 'transfer'].includes(type)) {
@@ -799,10 +805,12 @@ transactionsRouter.post('/', async (c) => {
 
   const resolvedCardId = typeof card_id === 'string' && card_id.trim() ? card_id.trim() : null;
   const resolvedSubId = typeof subscription_id === 'string' && subscription_id.trim() ? subscription_id.trim() : null;
+  const numTargetAmount = type === 'transfer' && target_amount ? Math.round(Number(target_amount)) : null;
+  const numExchangeRate = type === 'transfer' && exchange_rate ? Number(exchange_rate) : null;
 
   await c.env.DB.prepare(
-    `INSERT INTO transactions (id, user_id, type, amount, account_id, destination_account_id, category_id, transaction_time, remark, scene, amortize_days, amortize_start_date, exclude_daily_cost, item_id, card_id, subscription_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO transactions (id, user_id, type, amount, account_id, destination_account_id, category_id, transaction_time, remark, scene, amortize_days, amortize_start_date, exclude_daily_cost, item_id, card_id, subscription_id, target_amount, exchange_rate)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id,
     user.id,
@@ -819,7 +827,9 @@ transactionsRouter.post('/', async (c) => {
     dailyCost.excludeDailyCost,
     createdItemId,
     resolvedCardId,
-    resolvedSubId
+    resolvedSubId,
+    numTargetAmount,
+    numExchangeRate
   ).run();
 
   if (photoCheck.items.length > 0) {
@@ -1087,6 +1097,8 @@ transactionsRouter.put('/:id', async (c) => {
     exclude_daily_cost,
     keep_photo_ids,
     new_photos,
+    target_amount,
+    exchange_rate,
   } = body;
 
   const numAmount = Math.round(Number(amount));
@@ -1106,10 +1118,12 @@ transactionsRouter.put('/:id', async (c) => {
   }
 
   const shouldSyncPhotos = Array.isArray(keep_photo_ids) || Array.isArray(new_photos);
+  const numTargetAmount = type === 'transfer' && target_amount ? Math.round(Number(target_amount)) : null;
+  const numExchangeRate = type === 'transfer' && exchange_rate ? Number(exchange_rate) : null;
 
   const res = await c.env.DB.prepare(
     `UPDATE transactions 
-     SET type = ?, amount = ?, account_id = ?, destination_account_id = ?, category_id = ?, transaction_time = ?, remark = ?, scene = ?, amortize_days = ?, amortize_start_date = ?, exclude_daily_cost = ?
+     SET type = ?, amount = ?, account_id = ?, destination_account_id = ?, category_id = ?, transaction_time = ?, remark = ?, scene = ?, amortize_days = ?, amortize_start_date = ?, exclude_daily_cost = ?, target_amount = ?, exchange_rate = ?
      WHERE id = ? AND user_id = ?`
   ).bind(
     type,
@@ -1123,6 +1137,8 @@ transactionsRouter.put('/:id', async (c) => {
     dailyCost.amortizeDays,
     dailyCost.amortizeStartDate,
     dailyCost.excludeDailyCost,
+    numTargetAmount,
+    numExchangeRate,
     id,
     user.id
   ).run();

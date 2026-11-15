@@ -4,6 +4,14 @@ export interface User {
   nickname: string;
 }
 
+export interface CurrencyRate {
+  code: string;
+  name: string;
+  symbol: string;
+  rate_to_cny: number;
+  updated_at: string;
+}
+
 export interface Account {
   id: string;
   user_id: string;
@@ -16,6 +24,10 @@ export interface Account {
   color?: string;
   sort_order: number;
   created_at: string;
+  currency_symbol?: string;
+  currency_name?: string;
+  rate_to_cny?: number;
+  cny_current_balance?: number;
 }
 
 export interface Category {
@@ -47,6 +59,10 @@ export interface Transaction {
   card_id?: string | null;
   source?: string | null;
   external_id?: string | null;
+  target_amount?: number | null;
+  exchange_rate?: number | null;
+  currency?: string;
+  destination_currency?: string;
   created_at: string;
   // Joined properties
   account_name?: string;

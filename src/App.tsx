@@ -529,6 +529,7 @@ export function App() {
               setEditingAccount(acc);
               setIsAccountModalOpen(true);
             }}
+            onRefreshAccounts={loadBaseData}
           />
         )}
 
