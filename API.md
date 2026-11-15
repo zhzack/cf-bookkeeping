@@ -954,6 +954,94 @@
   ```
 - **说明**：支持用户针对特定换汇成本或锁汇需求，覆盖系统牌价设定固定折算汇率。
 
+---
+
+### 13. 预算管理与超支预警接口 (Budgets)
+
+#### 13.1 获取指定月份预算状况与消费进度
+- **接口**：`GET /api/budgets`
+- **需鉴权**
+- **Query 参数**：
+  - `month` (可选，格式 `YYYY-MM`，默认当前月份)
+- **返回示例**：
+  ```json
+  {
+    "month": "2026-11",
+    "is_default_template": false,
+    "overall": {
+      "budget_amount": 500000, // 分 (5,000.00元)
+      "spent_amount": 234000,  // 分 (2,340.00元)
+      "remaining_amount": 266000, // 分 (2,660.00元)
+      "usage_percent": 46.8,   // 消耗百分比
+      "days_in_month": 30,
+      "day_of_month": 15,
+      "days_remaining": 16,
+      "daily_allowance": 16625, // 每日建议可用：166.25元/天
+      "status": "normal" // 'normal' | 'warning' (接近限额) | 'exceeded' (超支)
+    },
+    "categories": [
+      {
+        "id": "bdg_xxxx",
+        "category_id": "cat_food",
+        "category_name": "餐饮美食",
+        "category_icon": "Utensils",
+        "category_color": "#F97316",
+        "budget_amount": 200000,
+        "spent_amount": 142000,
+        "remaining_amount": 58000,
+        "usage_percent": 71.0,
+        "alert_threshold": 80,
+        "status": "normal",
+        "is_custom": true
+      }
+    ],
+    "unbudgeted_categories": [
+      {
+        "category_id": "cat_ent",
+        "category_name": "休闲娱乐",
+        "category_icon": "Gamepad2",
+        "category_color": "#8B5CF6",
+        "spent_amount": 35000
+      }
+    ]
+  }
+  ```
+
+#### 13.2 单项设置/更新预算
+- **接口**：`POST /api/budgets`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "month": "2026-11", // 或 "default"
+    "category_id": null, // null 为全月总预算；指定分类 ID 为分类专项子预算
+    "amount": 500000,    // 分 (5,000.00元)
+    "alert_threshold": 80 // 预警阈值 (80%)
+  }
+  ```
+
+#### 13.3 批量设置/更新月度预算与分类子预算
+- **接口**：`POST /api/budgets/batch`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "month": "2026-11",
+    "overall_amount": 500000,
+    "alert_threshold": 80,
+    "copy_to_default": true, // 若为 true，同时同步到 "default" 通用模板
+    "category_budgets": [
+      { "category_id": "cat_food", "amount": 200000, "alert_threshold": 80 },
+      { "category_id": "cat_shop", "amount": 100000, "alert_threshold": 80 }
+    ]
+  }
+  ```
+
+#### 13.4 删除指定预算
+- **接口**：`DELETE /api/budgets/:id`
+- **需鉴权**
+
+
 
 
 

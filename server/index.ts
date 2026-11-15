@@ -14,6 +14,7 @@ import { subscriptionsRouter, processDueSubscriptions } from './routes/subscript
 import { aiRouter } from './routes/ai';
 import { backupRouter } from './routes/backup';
 import { currencyRouter } from './routes/currency';
+import { budgetsRouter } from './routes/budgets';
 
 const app = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
 
@@ -46,6 +47,7 @@ api.route('/subscriptions', subscriptionsRouter);
 api.route('/ai', aiRouter);
 api.route('/backup', backupRouter);
 api.route('/currency', currencyRouter);
+api.route('/budgets', budgetsRouter);
 
 // 挂载所有 /api 路由
 app.route('/api', api);

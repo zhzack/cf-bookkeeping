@@ -511,6 +511,7 @@ export function App() {
         {activeTab === 'stats' && (
           <StatsView
             refreshTrigger={refreshTrigger}
+            categories={categories}
             onEditTransaction={(tx) => {
               setEditingTx(tx);
               setIsTxModalOpen(true);

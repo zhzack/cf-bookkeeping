@@ -17,12 +17,14 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { fetchApi, formatCurrency } from '../api';
-import { Account, Category, OverviewData, Transaction, TransactionPhoto } from '../types';
+import { Account, Category, OverviewData, Transaction, TransactionPhoto, BudgetStatusResponse } from '../types';
 import { DynamicIcon } from '../components/DynamicIcon';
 import { DailyCostCard } from '../components/DailyCostCard';
 import { PhotoLightbox } from '../components/PhotoLightbox';
 import { BatchCategoryModal } from '../components/BatchCategoryModal';
 import { RuleManageModal } from '../components/RuleManageModal';
+import { BudgetCard } from '../components/BudgetCard';
+import { BudgetModal } from '../components/BudgetModal';
 import {
   ScenePickerModal,
   PRESET_SCENES,
@@ -86,6 +88,9 @@ export const TransactionsView: React.FC<Props> = ({
   const [catBatchFilter, setCatBatchFilter] = useState<SceneFilterPayload | null>(null);
   const [ruleModalOpen, setRuleModalOpen] = useState(false);
   const [batchNotice, setBatchNotice] = useState('');
+  const [budgetData, setBudgetData] = useState<BudgetStatusResponse | null>(null);
+  const [budgetLoading, setBudgetLoading] = useState(false);
+  const [isBudgetModalOpen, setIsBudgetModalOpen] = useState(false);
 
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxImages, setLightboxImages] = useState<string[]>([]);
@@ -202,6 +207,24 @@ export const TransactionsView: React.FC<Props> = ({
   useEffect(() => {
     loadData();
   }, [loadData, refreshTrigger]);
+
+  const loadBudget = useCallback(async () => {
+    const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const targetM = searchAllMonths || currentMonth === 'all' ? today.slice(0, 7) : currentMonth;
+    setBudgetLoading(true);
+    try {
+      const bRes = await fetchApi<BudgetStatusResponse>(`/api/budgets?month=${targetM}`);
+      setBudgetData(bRes);
+    } catch (err) {
+      console.error('加载预算数据失败', err);
+    } finally {
+      setBudgetLoading(false);
+    }
+  }, [currentMonth, searchAllMonths]);
+
+  useEffect(() => {
+    loadBudget();
+  }, [loadBudget, refreshTrigger]);
 
   const resetAllFilters = () => {
     setSearchInput('');
@@ -675,6 +698,16 @@ export const TransactionsView: React.FC<Props> = ({
         </div>
       </div>
 
+      {/* 月度预算进度与每日推荐可用 (紧凑视图) */}
+      {!hasActiveFilter && (
+        <BudgetCard
+          compact={true}
+          budgetData={budgetData}
+          loading={budgetLoading}
+          onOpenModal={() => setIsBudgetModalOpen(true)}
+        />
+      )}
+
       {/* 每日生活成本统计看板（未激活搜索筛选时在首页展示） */}
       {!hasActiveFilter && dailyCost && <DailyCostCard dailyCost={dailyCost} />}
 
@@ -991,6 +1024,17 @@ export const TransactionsView: React.FC<Props> = ({
           loading={lightboxLoading}
         />
       )}
+
+      <BudgetModal
+        isOpen={isBudgetModalOpen}
+        onClose={() => setIsBudgetModalOpen(false)}
+        onSuccess={() => {
+          loadBudget();
+          loadData();
+        }}
+        categories={categories}
+        initialMonth={currentMonth === 'all' ? undefined : currentMonth}
+      />
     </div>
   );
 };

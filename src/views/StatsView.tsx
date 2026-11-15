@@ -10,7 +10,9 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { fetchApi, formatCurrency } from '../api';
-import { OverviewData, Transaction, TransactionPhoto } from '../types';
+import { OverviewData, Transaction, TransactionPhoto, BudgetStatusResponse, Category } from '../types';
+import { BudgetCard } from '../components/BudgetCard';
+import { BudgetModal } from '../components/BudgetModal';
 import { DynamicIcon } from '../components/DynamicIcon';
 import { DailyCostCard } from '../components/DailyCostCard';
 import { PhotoLightbox } from '../components/PhotoLightbox';
@@ -33,6 +35,7 @@ interface DetailTarget {
 interface Props {
   refreshTrigger: number;
   onEditTransaction?: (tx: Transaction) => void;
+  categories?: Category[];
 }
 
 function shiftDateDays(dateStr: string, days: number): string {
@@ -59,7 +62,7 @@ function getTrendKeyDateRange(key: string): { start: string; end: string } {
   return { start: key, end: key };
 }
 
-export const StatsView: React.FC<Props> = ({ refreshTrigger, onEditTransaction }) => {
+export const StatsView: React.FC<Props> = ({ refreshTrigger, onEditTransaction, categories }) => {
   const todayStr = getLocalTodayStr();
   const [period, setPeriod] = useState<StatsPeriod>('month');
   const [weekAnchor, setWeekAnchor] = useState<string>(todayStr);
@@ -82,6 +85,9 @@ export const StatsView: React.FC<Props> = ({ refreshTrigger, onEditTransaction }
   const [sceneTargetTx, setSceneTargetTx] = useState<Transaction | null>(null);
   const [availableScenes, setAvailableScenes] = useState<string[]>(PRESET_SCENES);
   const [isAiDiagOpen, setIsAiDiagOpen] = useState(false);
+  const [budgetData, setBudgetData] = useState<BudgetStatusResponse | null>(null);
+  const [budgetLoading, setBudgetLoading] = useState(false);
+  const [isBudgetModalOpen, setIsBudgetModalOpen] = useState(false);
 
   // 照片预览
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -119,6 +125,23 @@ export const StatsView: React.FC<Props> = ({ refreshTrigger, onEditTransaction }
   useEffect(() => {
     loadOverview();
   }, [loadOverview, refreshTrigger]);
+
+  const loadBudget = useCallback(async () => {
+    if (period !== 'month') return;
+    setBudgetLoading(true);
+    try {
+      const bRes = await fetchApi<BudgetStatusResponse>(`/api/budgets?month=${monthAnchor}`);
+      setBudgetData(bRes);
+    } catch (err) {
+      console.error('加载预算数据失败', err);
+    } finally {
+      setBudgetLoading(false);
+    }
+  }, [period, monthAnchor]);
+
+  useEffect(() => {
+    loadBudget();
+  }, [loadBudget, refreshTrigger]);
 
   useEffect(() => {
     fetchApi<{ scenes: string[] }>('/api/transactions/scenes')
@@ -467,6 +490,15 @@ export const StatsView: React.FC<Props> = ({ refreshTrigger, onEditTransaction }
           <span>生成/查看体检</span>
         </button>
       </div>
+
+      {/* 月度预算与超支预警看板 (按月统计时呈现) */}
+      {period === 'month' && (
+        <BudgetCard
+          budgetData={budgetData}
+          loading={budgetLoading}
+          onOpenModal={() => setIsBudgetModalOpen(true)}
+        />
+      )}
 
       {/* 周期收支概括 */}
       <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm space-y-4">
@@ -908,6 +940,17 @@ export const StatsView: React.FC<Props> = ({ refreshTrigger, onEditTransaction }
       <AiMonthlyDiagnosisModal
         isOpen={isAiDiagOpen}
         onClose={() => setIsAiDiagOpen(false)}
+        initialMonth={monthAnchor}
+      />
+
+      <BudgetModal
+        isOpen={isBudgetModalOpen}
+        onClose={() => setIsBudgetModalOpen(false)}
+        onSuccess={() => {
+          loadBudget();
+          loadOverview();
+        }}
+        categories={categories || []}
         initialMonth={monthAnchor}
       />
     </div>

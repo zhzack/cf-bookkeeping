@@ -282,6 +282,59 @@ export interface AiDiagnosisResult {
   generated_at: string;
 }
 
+export interface BudgetRecord {
+  id: string;
+  user_id: string;
+  month: string;
+  category_id: string | null;
+  amount: number; // 分
+  alert_threshold: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BudgetOverview {
+  budget_amount: number; // 分
+  spent_amount: number; // 分
+  remaining_amount: number; // 分
+  usage_percent: number;
+  days_in_month: number;
+  day_of_month: number;
+  days_remaining: number;
+  daily_allowance: number; // 分/天
+  status: 'normal' | 'warning' | 'exceeded';
+}
+
+export interface CategoryBudgetDetail {
+  id?: string;
+  category_id: string;
+  category_name: string;
+  category_icon?: string;
+  category_color?: string;
+  budget_amount: number; // 分
+  spent_amount: number; // 分
+  remaining_amount: number; // 分
+  usage_percent: number;
+  alert_threshold: number;
+  status: 'normal' | 'warning' | 'exceeded';
+  is_custom: boolean;
+}
+
+export interface BudgetStatusResponse {
+  month: string;
+  is_default_template: boolean;
+  overall: BudgetOverview | null;
+  categories: CategoryBudgetDetail[];
+  unbudgeted_categories: {
+    category_id: string;
+    category_name: string;
+    category_icon?: string;
+    category_color?: string;
+    spent_amount: number;
+  }[];
+}
+
+
 
 
 
