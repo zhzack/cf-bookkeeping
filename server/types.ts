@@ -3,6 +3,7 @@ export interface Env {
   JWT_SECRET: string;
   ASSETS?: Fetcher;
   AI?: any;
+  PHOTOS_BUCKET?: R2Bucket;
 }
 
 export interface User {

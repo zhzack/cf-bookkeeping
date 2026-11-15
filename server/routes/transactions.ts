@@ -35,6 +35,7 @@ interface ItemDetailsInput {
 
 async function createItemRecord(
   db: D1Database,
+  bucket: R2Bucket | undefined,
   userId: string,
   priceCents: number,
   purchaseDate: string,
@@ -63,7 +64,7 @@ async function createItemRecord(
     .run();
 
   if (photos.length > 0) {
-    await insertPhotos(db, 'item_photos', 'item_id', itemId, userId, photos);
+    await insertPhotos(db, bucket, 'item_photos', 'item_id', itemId, userId, photos);
   }
   return itemId;
 }
@@ -691,7 +692,7 @@ transactionsRouter.get('/', async (c) => {
 transactionsRouter.get('/photos/:photoId', async (c) => {
   const user = c.get('user');
   const photoId = c.req.param('photoId');
-  const res = await servePhotoBinary(c.env.DB, 'transaction_photos', photoId, user.id);
+  const res = await servePhotoBinary(c.env.DB, c.env.PHOTOS_BUCKET, 'transaction_photos', photoId, user.id);
   if (!res) {
     return c.json({ error: '照片不存在' }, 404);
   }
@@ -795,6 +796,7 @@ transactionsRouter.post('/', async (c) => {
     }
     createdItemId = await createItemRecord(
       c.env.DB,
+      c.env.PHOTOS_BUCKET,
       user.id,
       numAmount,
       time.slice(0, 10),
@@ -833,7 +835,7 @@ transactionsRouter.post('/', async (c) => {
   ).run();
 
   if (photoCheck.items.length > 0) {
-    await insertPhotos(c.env.DB, 'transaction_photos', 'transaction_id', id, user.id, photoCheck.items);
+    await insertPhotos(c.env.DB, c.env.PHOTOS_BUCKET, 'transaction_photos', 'transaction_id', id, user.id, photoCheck.items);
   }
 
   return c.json({
@@ -910,6 +912,7 @@ transactionsRouter.post('/:id/convert-to-item', async (c) => {
 
   const itemId = await createItemRecord(
     c.env.DB,
+    c.env.PHOTOS_BUCKET,
     user.id,
     tx.amount,
     tx.transaction_time.slice(0, 10),
@@ -1150,6 +1153,7 @@ transactionsRouter.put('/:id', async (c) => {
   if (shouldSyncPhotos) {
     const syncRes = await syncPhotos(
       c.env.DB,
+      c.env.PHOTOS_BUCKET,
       'transaction_photos',
       'transaction_id',
       id,
@@ -1170,7 +1174,7 @@ transactionsRouter.delete('/:id', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
 
-  await deletePhotosByParent(c.env.DB, 'transaction_photos', 'transaction_id', id, user.id);
+  await deletePhotosByParent(c.env.DB, c.env.PHOTOS_BUCKET, 'transaction_photos', 'transaction_id', id, user.id);
 
   const res = await c.env.DB.prepare(
     'DELETE FROM transactions WHERE id = ? AND user_id = ?'

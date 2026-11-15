@@ -43,8 +43,19 @@ export function validatePhotoDataUrls(rawPhotos: unknown): { items: ValidatedPho
   return { items };
 }
 
+function base64ToUint8Array(dataUrl: string): Uint8Array {
+  const base64Part = dataUrl.split(',')[1] || '';
+  const binaryStr = atob(base64Part);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
+  }
+  return bytes;
+}
+
 export async function insertPhotos(
   db: D1Database,
+  bucket: R2Bucket | undefined,
   table: PhotoTable,
   fkCol: PhotoFkCol,
   parentId: string,
@@ -53,12 +64,35 @@ export async function insertPhotos(
 ) {
   for (const photo of photos) {
     const photoId = 'pho_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+    let storedDataUrl = photo.dataUrl;
+
+    // 优先存储至 Cloudflare R2 对象存储，降低 D1 数据库负载
+    if (bucket) {
+      try {
+        const ext = photo.mimeType.includes('png')
+          ? 'png'
+          : photo.mimeType.includes('webp')
+          ? 'webp'
+          : 'jpg';
+        const r2Key = `photos/${table}/${userId}/${photoId}.${ext}`;
+        const bytes = base64ToUint8Array(photo.dataUrl);
+
+        await bucket.put(r2Key, bytes, {
+          httpMetadata: { contentType: photo.mimeType },
+          customMetadata: { parentId, userId, photoId },
+        });
+        storedDataUrl = `r2:${r2Key}`;
+      } catch (err) {
+        console.warn('R2 对象存储写入失败，自动降级回退至 D1 数据库存储:', err);
+      }
+    }
+
     await db
       .prepare(
         `INSERT INTO ${table} (id, ${fkCol}, user_id, mime_type, data_url, size_bytes)
          VALUES (?, ?, ?, ?, ?, ?)`
       )
-      .bind(photoId, parentId, userId, photo.mimeType, photo.dataUrl, photo.sizeBytes)
+      .bind(photoId, parentId, userId, photo.mimeType, storedDataUrl, photo.sizeBytes)
       .run();
   }
 }
@@ -79,11 +113,21 @@ export async function listPhotos(
     )
     .bind(parentId, userId)
     .all<PhotoRecord>();
-  return results;
+
+  const routePrefix = table === 'transaction_photos' ? 'transactions' : 'items';
+
+  return (results || []).map((row) => ({
+    ...row,
+    // 如果存储在 R2，转换为标准的二进制流 API 访问路径
+    data_url: row.data_url.startsWith('r2:')
+      ? `/api/${routePrefix}/photos/${row.id}`
+      : row.data_url,
+  }));
 }
 
 export async function syncPhotos(
   db: D1Database,
+  bucket: R2Bucket | undefined,
   table: PhotoTable,
   fkCol: PhotoFkCol,
   parentId: string,
@@ -97,9 +141,9 @@ export async function syncPhotos(
     : [];
 
   const existingRes = await db
-    .prepare(`SELECT id FROM ${table} WHERE ${fkCol} = ? AND user_id = ?`)
+    .prepare(`SELECT id, data_url FROM ${table} WHERE ${fkCol} = ? AND user_id = ?`)
     .bind(parentId, userId)
-    .all<{ id: string }>();
+    .all<{ id: string; data_url: string }>();
 
   const keptExistingCount = hasKeep
     ? existingRes.results.filter((row) => keepIds.includes(row.id)).length
@@ -112,13 +156,20 @@ export async function syncPhotos(
   if (hasKeep) {
     for (const row of existingRes.results) {
       if (!keepIds.includes(row.id)) {
+        if (bucket && row.data_url.startsWith('r2:')) {
+          try {
+            await bucket.delete(row.data_url.slice(3));
+          } catch (err) {
+            console.warn('R2 对象删除失败:', err);
+          }
+        }
         await db.prepare(`DELETE FROM ${table} WHERE id = ? AND user_id = ?`).bind(row.id, userId).run();
       }
     }
   }
 
   if (newPhotos.length > 0) {
-    await insertPhotos(db, table, fkCol, parentId, userId, newPhotos);
+    await insertPhotos(db, bucket, table, fkCol, parentId, userId, newPhotos);
   }
 
   return {};
@@ -126,16 +177,35 @@ export async function syncPhotos(
 
 export async function deletePhotosByParent(
   db: D1Database,
+  bucket: R2Bucket | undefined,
   table: PhotoTable,
   fkCol: PhotoFkCol,
   parentId: string,
   userId: string
 ) {
+  if (bucket) {
+    try {
+      const { results } = await db
+        .prepare(`SELECT data_url FROM ${table} WHERE ${fkCol} = ? AND user_id = ?`)
+        .bind(parentId, userId)
+        .all<{ data_url: string }>();
+
+      for (const row of results || []) {
+        if (row.data_url.startsWith('r2:')) {
+          await bucket.delete(row.data_url.slice(3)).catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.warn('级联清理 R2 照片失败:', err);
+    }
+  }
+
   await db.prepare(`DELETE FROM ${table} WHERE ${fkCol} = ? AND user_id = ?`).bind(parentId, userId).run();
 }
 
 export async function servePhotoBinary(
   db: D1Database,
+  bucket: R2Bucket | undefined,
   table: PhotoTable,
   photoId: string,
   userId: string
@@ -147,14 +217,24 @@ export async function servePhotoBinary(
 
   if (!photo) return null;
 
-  const base64Part = photo.data_url.split(',')[1] || '';
-  const binaryStr = atob(base64Part);
-  const bytes = new Uint8Array(binaryStr.length);
-  for (let i = 0; i < binaryStr.length; i++) {
-    bytes[i] = binaryStr.charCodeAt(i);
+  // 1. 如果是存放在 Cloudflare R2 的对象
+  if (photo.data_url.startsWith('r2:') && bucket) {
+    const r2Key = photo.data_url.slice(3);
+    const obj = await bucket.get(r2Key);
+    if (obj) {
+      return new Response(obj.body, {
+        headers: {
+          'Content-Type': photo.mime_type || obj.httpMetadata?.contentType || 'image/jpeg',
+          'Cache-Control': 'public, max-age=31536000, immutable',
+        },
+      });
+    }
   }
 
-  return new Response(bytes, {
+  // 2. 如果是历史存放在 D1 的 Base64
+  const bytes = base64ToUint8Array(photo.data_url);
+
+  return new Response(bytes as any, {
     headers: {
       'Content-Type': photo.mime_type || 'image/jpeg',
       'Cache-Control': 'private, max-age=86400',

@@ -969,3 +969,85 @@ backupRouter.post('/import-third-party', async (c) => {
     new_categories_count: categoryMap.size - (categoriesRes.results?.length || 0),
   });
 });
+
+// 将存放在 D1 的存量 Base64 照片一键迁移至 Cloudflare R2
+backupRouter.post('/migrate-photos-to-r2', async (c) => {
+  const user = c.get('user');
+  const db = c.env.DB;
+  const bucket = c.env.PHOTOS_BUCKET;
+
+  if (!bucket) {
+    return c.json({ error: '尚未绑定 Cloudflare R2 存储桶，请先在 Cloudflare 启用 R2 并配置 wrangler.jsonc' }, 400);
+  }
+
+  let migratedCount = 0;
+  let totalBytesSaved = 0;
+
+  // 1. 迁移流水照片
+  const txPhotos = await db.prepare(
+    "SELECT id, user_id, mime_type, data_url, size_bytes FROM transaction_photos WHERE user_id = ? AND data_url LIKE 'data:image/%'"
+  ).bind(user.id).all<{ id: string; user_id: string; mime_type: string; data_url: string; size_bytes: number }>();
+
+  for (const p of txPhotos.results || []) {
+    try {
+      const ext = p.mime_type.includes('png') ? 'png' : p.mime_type.includes('webp') ? 'webp' : 'jpg';
+      const r2Key = `photos/transaction_photos/${p.user_id}/${p.id}.${ext}`;
+      const base64Part = p.data_url.split(',')[1] || '';
+      const binaryStr = atob(base64Part);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+
+      await bucket.put(r2Key, bytes, {
+        httpMetadata: { contentType: p.mime_type },
+      });
+
+      await db.prepare('UPDATE transaction_photos SET data_url = ? WHERE id = ?')
+        .bind(`r2:${r2Key}`, p.id)
+        .run();
+
+      migratedCount++;
+      totalBytesSaved += p.size_bytes || bytes.length;
+    } catch (err) {
+      console.warn('迁移照片失败:', p.id, err);
+    }
+  }
+
+  // 2. 迁移大件照片
+  const itemPhotos = await db.prepare(
+    "SELECT id, user_id, mime_type, data_url, size_bytes FROM item_photos WHERE user_id = ? AND data_url LIKE 'data:image/%'"
+  ).bind(user.id).all<{ id: string; user_id: string; mime_type: string; data_url: string; size_bytes: number }>();
+
+  for (const p of itemPhotos.results || []) {
+    try {
+      const ext = p.mime_type.includes('png') ? 'png' : p.mime_type.includes('webp') ? 'webp' : 'jpg';
+      const r2Key = `photos/item_photos/${p.user_id}/${p.id}.${ext}`;
+      const base64Part = p.data_url.split(',')[1] || '';
+      const binaryStr = atob(base64Part);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+
+      await bucket.put(r2Key, bytes, {
+        httpMetadata: { contentType: p.mime_type },
+      });
+
+      await db.prepare('UPDATE item_photos SET data_url = ? WHERE id = ?')
+        .bind(`r2:${r2Key}`, p.id)
+        .run();
+
+      migratedCount++;
+      totalBytesSaved += p.size_bytes || bytes.length;
+    } catch (err) {
+      console.warn('迁移大件照片失败:', p.id, err);
+    }
+  }
+
+  return c.json({
+    message: `成功迁移 ${migratedCount} 张照片至 R2，为 D1 数据库释放约 ${(totalBytesSaved / 1024 / 1024).toFixed(2)} MB 空间`,
+    migratedCount,
+    totalBytesSaved,
+  });
+});

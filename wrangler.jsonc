@@ -22,6 +22,13 @@
 	"ai": {
 		"binding": "AI"
 	},
+	// 待在 Cloudflare 控制台启用 R2 并创建 cf-bookkeeping-photos 存储桶后开启：
+	// "r2_buckets": [
+	// 	{
+	// 		"binding": "PHOTOS_BUCKET",
+	// 		"bucket_name": "cf-bookkeeping-photos"
+	// 	}
+	// ],
 	"triggers": {
 		"crons": [
 			"0 1 * * *"

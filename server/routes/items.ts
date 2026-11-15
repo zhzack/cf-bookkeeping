@@ -43,7 +43,7 @@ async function insertSyncedLedgerTx(
 itemsRouter.get('/photos/:photoId', async (c) => {
   const user = c.get('user');
   const photoId = c.req.param('photoId');
-  const res = await servePhotoBinary(c.env.DB, 'item_photos', photoId, user.id);
+  const res = await servePhotoBinary(c.env.DB, c.env.PHOTOS_BUCKET, 'item_photos', photoId, user.id);
   if (!res) {
     return c.json({ error: '照片不存在' }, 404);
   }
@@ -285,7 +285,7 @@ itemsRouter.post('/', async (c) => {
   ).run();
 
   if (photoCheck.items.length > 0) {
-    await insertPhotos(c.env.DB, 'item_photos', 'item_id', id, user.id, photoCheck.items);
+    await insertPhotos(c.env.DB, c.env.PHOTOS_BUCKET, 'item_photos', 'item_id', id, user.id, photoCheck.items);
   }
 
   // 若选择同步记账流水
@@ -372,6 +372,7 @@ itemsRouter.put('/:id', async (c) => {
   if (shouldSyncPhotos) {
     const syncRes = await syncPhotos(
       c.env.DB,
+      c.env.PHOTOS_BUCKET,
       'item_photos',
       'item_id',
       id,
@@ -517,7 +518,7 @@ itemsRouter.delete('/:id', async (c) => {
   const id = c.req.param('id');
 
   await Promise.all([
-    deletePhotosByParent(c.env.DB, 'item_photos', 'item_id', id, user.id),
+    deletePhotosByParent(c.env.DB, c.env.PHOTOS_BUCKET, 'item_photos', 'item_id', id, user.id),
     c.env.DB.prepare('UPDATE transactions SET item_id = NULL WHERE item_id = ? AND user_id = ?').bind(id, user.id).run(),
   ]);
 
