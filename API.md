@@ -767,5 +767,123 @@
   }
   ```
 
+---
+
+### 11. 灾备还原与数据资产中心接口 (Data Portability)
+
+实现个人财务数据 100% 自主可控、无损灾备迁移、规范 Excel/CSV 报表导出与主流第三方记账软件搬家迁移。
+
+#### 11.1 全量数据灾备导出 (JSON)
+- **接口**：`GET /api/backup/export-full`
+- **需鉴权**
+- **说明**：无任何条数限制，导出当前用户在数据库中的所有资产数据（包含账户、收支分类、所有记账流水、持物大件资产、大件追加维护费、预付费充值卡与次卡、卡片核销日志、周期订阅及自动分类规则）。
+- **返回示例**：
+  ```json
+  {
+    "app": "cf-bookkeeping",
+    "version": "2.0",
+    "export_time": "2026-11-15T08:35:00.000Z",
+    "user": {
+      "username": "admin",
+      "nickname": "财务管家"
+    },
+    "counts": {
+      "accounts": 5,
+      "categories": 24,
+      "transactions": 1420,
+      "items": 12,
+      "item_expenses": 6,
+      "prepaid_cards": 4,
+      "prepaid_card_logs": 18,
+      "subscriptions": 6,
+      "auto_rules": 8
+    },
+    "data": {
+      "accounts": [...],
+      "categories": [...],
+      "transactions": [...],
+      "items": [...],
+      "item_expenses": [...],
+      "prepaid_cards": [...],
+      "prepaid_card_logs": [...],
+      "subscriptions": [...],
+      "auto_rules": [...]
+    }
+  }
+  ```
+
+#### 11.2 全量数据灾备还原 (JSON)
+- **接口**：`POST /api/backup/restore-full`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "backup_data": { ... }, // 导出的 JSON 对象
+    "mode": "merge" // "merge"(智能增量合并) | "overwrite"(完全清空覆盖换库还原)
+  }
+  ```
+- **说明**：服务端对各关联表进行依赖拓扑排序入库（采用分批原子事务批处理），并强制将外键绑定至当前登录用户，杜绝数据越权。
+- **返回示例**：
+  ```json
+  {
+    "success": true,
+    "message": "灾备恢复执行成功",
+    "restored": {
+      "accounts": 5,
+      "categories": 24,
+      "items": 12,
+      "item_expenses": 6,
+      "prepaid_cards": 4,
+      "subscriptions": 6,
+      "transactions": 1420,
+      "auto_rules": 8
+    }
+  }
+  ```
+
+#### 11.3 规范 Excel / CSV 报表导出
+- **接口**：`GET /api/backup/export-csv`
+- **需鉴权**
+- **Query 参数**：
+  - `scope`: `'transactions'`(流水明细) | `'items'`(持物大件清单) | `'cards'`(会员卡包) | `'subscriptions'`(周期订阅)
+  - `startDate`: 可选，起始日期 `YYYY-MM-DD`
+  - `endDate`: 可选，截止日期 `YYYY-MM-DD`
+- **说明**：响应体自动注入 **UTF-8 BOM** 签名并附带 `Content-Disposition: attachment; filename="..."` 头，在 Windows/Mac Excel、WPS 或 Apple Numbers 中直接打开绝无乱码。
+
+#### 11.4 第三方记账软件 CSV 解析预检
+- **接口**：`POST /api/backup/parse-third-party`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "csv_text": "时间,类型,金额,分类,账户,备注\n2026-11-12 12:30,支出,35.5,餐饮美食,微信支付,肯德基午餐"
+  }
+  ```
+- **说明**：自动探测字段映射，识别主流记账应用（钱迹 Qianji、随手记、鲨鱼记账等），返回提取到的流水条数、涉及的新旧账户与分类及前 10 笔样本预览。
+
+#### 11.5 第三方记账软件数据批量落库
+- **接口**：`POST /api/backup/import-third-party`
+- **需鉴权**
+- **请求体**：
+  ```json
+  {
+    "rows": [
+      {
+        "transaction_time": "2026-11-12 12:30:00",
+        "type": "expense",
+        "amount": 3550, // 分
+        "account_name": "微信支付",
+        "category_name": "餐饮美食",
+        "remark": "肯德基午餐",
+        "scene": "日常三餐"
+      }
+    ],
+    "create_missing_accounts": true,
+    "create_missing_categories": true
+  }
+  ```
+- **说明**：根据用户偏好，若账单中出现新账户或新分类，系统会自动建立该账户与分类并完成批量关联入库。
+
+
 
 

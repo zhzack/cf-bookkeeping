@@ -1,5 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Download, LogOut, Cloud, BookOpen, Bell, BellOff, RotateCcw, Tags, Wand2, Sparkles } from 'lucide-react';
+import {
+  Lock,
+  Download,
+  LogOut,
+  Cloud,
+  BookOpen,
+  Bell,
+  BellOff,
+  RotateCcw,
+  Tags,
+  Wand2,
+  Sparkles,
+  FileSpreadsheet,
+  Database,
+  Upload,
+} from 'lucide-react';
 import { fetchApi } from '../api';
 import { User, Transaction, Account, Category, AutoRule } from '../types';
 import { GuideSectionId } from '../data/userGuide';
@@ -7,6 +22,9 @@ import { ShortcutTokensCard } from '../components/ShortcutTokensCard';
 import { CategoryManageModal } from '../components/CategoryManageModal';
 import { RuleManageModal } from '../components/RuleManageModal';
 import { AiSettingsModal } from '../components/AiSettingsModal';
+import { BackupRestoreModal } from '../components/BackupRestoreModal';
+import { ExportReportModal } from '../components/ExportReportModal';
+import { ThirdPartyImportModal } from '../components/ThirdPartyImportModal';
 import { DynamicIcon } from '../components/DynamicIcon';
 
 interface Props {
@@ -44,6 +62,9 @@ export const SettingsView: React.FC<Props> = ({
   const [catModalType, setCatModalType] = useState<'expense' | 'income'>('expense');
   const [ruleModalOpen, setRuleModalOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [restoreModalOpen, setRestoreModalOpen] = useState(false);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [thirdPartyModalOpen, setThirdPartyModalOpen] = useState(false);
   const [rules, setRules] = useState<AutoRule[]>([]);
 
   const loadRules = () => {
@@ -89,30 +110,18 @@ export const SettingsView: React.FC<Props> = ({
   const handleExportData = async () => {
     setExporting(true);
     try {
-      // 获取全部流水与账户
-      const [transData, accountsData, catsData] = await Promise.all([
-        fetchApi<{ transactions: Transaction[] }>('/api/transactions?limit=2000'),
-        fetchApi<{ accounts: Account[] }>('/api/accounts'),
-        fetchApi<{ categories: Category[] }>('/api/categories'),
-      ]);
-
-      const backupObj = {
-        export_time: new Date().toISOString(),
-        user: { username: user.username, nickname: user.nickname },
-        accounts: accountsData.accounts,
-        categories: catsData.categories,
-        transactions: transData.transactions,
-      };
-
+      const backupObj = await fetchApi<any>('/api/backup/export-full');
       const blob = new Blob([JSON.stringify(backupObj, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `cf_bookkeeping_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert('导出失败: ' + err.message);
+      alert('导出备份失败: ' + err.message);
     } finally {
       setExporting(false);
     }
@@ -396,24 +405,94 @@ export const SettingsView: React.FC<Props> = ({
         </form>
       </div>
 
-      {/* 数据安全与备份 */}
-      <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
-        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-          <Download className="w-4 h-4 text-slate-400" />
-          <span>数据备份与导出</span>
-        </h3>
-        <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-          定期导出完整的 JSON 数据备份文件，随时随地掌握自己的财务资产数据。
+      {/* 灾备还原与数据资产中心 */}
+      <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-3.5">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+            <Database className="w-4 h-4 text-indigo-600" />
+            <span>灾备还原与数据资产中心</span>
+          </h3>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+            100% 自主可控
+          </span>
+        </div>
+
+        <p className="text-xs text-slate-400 leading-relaxed">
+          全量导出离线 JSON 备份、换库无损恢复还原，支持导出 Excel / CSV 报表及第三方记账软件（钱迹、随手记等）数据搬家。
         </p>
 
-        <button
-          onClick={handleExportData}
-          disabled={exporting}
-          className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-xl flex items-center justify-center gap-2 transition"
-        >
-          <Download className="w-4 h-4" />
-          <span>{exporting ? '正在打包数据...' : '全量导出记账数据 (JSON)'}</span>
-        </button>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {/* 全量 JSON 备份 */}
+          <button
+            type="button"
+            onClick={handleExportData}
+            disabled={exporting}
+            className="p-3 bg-slate-50 hover:bg-indigo-50/60 border border-slate-200/80 hover:border-indigo-300 rounded-2xl text-left transition group flex items-start gap-3"
+          >
+            <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Download className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-800">
+                {exporting ? '正在打包数据...' : '全量灾备备份 (JSON)'}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-0.5">
+                包含所有账户、流水、大件、卡包、订阅与规则
+              </div>
+            </div>
+          </button>
+
+          {/* JSON 灾备还原恢复 */}
+          <button
+            type="button"
+            onClick={() => setRestoreModalOpen(true)}
+            className="p-3 bg-slate-50 hover:bg-indigo-50/60 border border-slate-200/80 hover:border-indigo-300 rounded-2xl text-left transition group flex items-start gap-3"
+          >
+            <div className="w-8 h-8 rounded-xl bg-violet-100 text-violet-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <RotateCcw className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-800">灾备恢复还原 (JSON)</div>
+              <div className="text-[10px] text-slate-400 mt-0.5">
+                支持智能增量合并或完全覆盖换库还原
+              </div>
+            </div>
+          </button>
+
+          {/* 导出 Excel / CSV */}
+          <button
+            type="button"
+            onClick={() => setReportModalOpen(true)}
+            className="p-3 bg-slate-50 hover:bg-emerald-50/60 border border-slate-200/80 hover:border-emerald-300 rounded-2xl text-left transition group flex items-start gap-3"
+          >
+            <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <FileSpreadsheet className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-800">导出 Excel / CSV 报表</div>
+              <div className="text-[10px] text-slate-400 mt-0.5">
+                流水/大件/卡包/订阅规范表格，无中文乱码
+              </div>
+            </div>
+          </button>
+
+          {/* 第三方记账软件搬家 */}
+          <button
+            type="button"
+            onClick={() => setThirdPartyModalOpen(true)}
+            className="p-3 bg-slate-50 hover:bg-blue-50/60 border border-slate-200/80 hover:border-blue-300 rounded-2xl text-left transition group flex items-start gap-3"
+          >
+            <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Upload className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-800">第三方记账软件搬家</div>
+              <div className="text-[10px] text-slate-400 mt-0.5">
+                支持钱迹、随手记、鲨鱼记账等 CSV 一键迁移
+              </div>
+            </div>
+          </button>
+        </div>
       </div>
 
       {/* 云平台信息 */}
@@ -458,6 +537,23 @@ export const SettingsView: React.FC<Props> = ({
       <AiSettingsModal
         isOpen={aiModalOpen}
         onClose={() => setAiModalOpen(false)}
+      />
+
+      <BackupRestoreModal
+        isOpen={restoreModalOpen}
+        onClose={() => setRestoreModalOpen(false)}
+        onSuccess={() => onCategoriesChanged()}
+      />
+
+      <ExportReportModal
+        isOpen={reportModalOpen}
+        onClose={() => setReportModalOpen(false)}
+      />
+
+      <ThirdPartyImportModal
+        isOpen={thirdPartyModalOpen}
+        onClose={() => setThirdPartyModalOpen(false)}
+        onSuccess={() => onCategoriesChanged()}
       />
     </div>
   );
