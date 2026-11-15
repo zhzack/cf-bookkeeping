@@ -18,6 +18,7 @@ import {
 import { fetchApi, formatCurrency } from '../api';
 import { Account, Category, AiParseResult } from '../types';
 import { DynamicIcon } from './DynamicIcon';
+import { compressImageToDataUrl } from '../utils/image';
 
 interface Props {
   isOpen: boolean;
@@ -54,6 +55,7 @@ export const AiRecordModal: React.FC<Props> = ({
 
   // 解析中与结果状态
   const [parsing, setParsing] = useState(false);
+  const [compressing, setCompressing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [parsedResult, setParsedResult] = useState<AiParseResult | null>(null);
@@ -131,24 +133,28 @@ export const AiRecordModal: React.FC<Props> = ({
     }
   };
 
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 8 * 1024 * 1024) {
-      setError('图片大小不能超过 8MB');
+    if (file.size > 15 * 1024 * 1024) {
+      setError('图片大小不能超过 15MB');
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result as string;
-      setImagePreview(result);
-      setImageBase64(result);
-      setError('');
+    setCompressing(true);
+    setError('');
+    try {
+      // 客户端压缩小票照片至长边 1280px，控制体积在几百 KB 内，保留文字高清晰度
+      const compressedDataUrl = await compressImageToDataUrl(file, 1280);
+      setImagePreview(compressedDataUrl);
+      setImageBase64(compressedDataUrl);
       setParsedResult(null);
-    };
-    reader.readAsDataURL(file);
+    } catch (err: any) {
+      setError(err.message || '图片压缩处理失败');
+    } finally {
+      setCompressing(false);
+    }
   };
 
   // 触发 AI 解析
@@ -402,10 +408,15 @@ export const AiRecordModal: React.FC<Props> = ({
             <button
               type="button"
               onClick={handleParse}
-              disabled={parsing || (activeTab === 'text' ? !inputText.trim() : !imageBase64)}
+              disabled={parsing || compressing || (activeTab === 'text' ? !inputText.trim() : !imageBase64)}
               className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-md shadow-indigo-200"
             >
-              {parsing ? (
+              {compressing ? (
+                <>
+                  <RotateCw className="w-4 h-4 animate-spin" />
+                  <span>正在优化压缩图片...</span>
+                </>
+              ) : parsing ? (
                 <>
                   <RotateCw className="w-4 h-4 animate-spin" />
                   <span>AI 正在思考分析中...</span>

@@ -106,25 +106,25 @@ aiRouter.post('/config', async (c) => {
 
 // 3. 自然语言 / 语音记账文本智能解析
 aiRouter.post('/parse-text', async (c) => {
-  const user = c.get('user');
-  const db = c.env.DB;
-  const body = await c.req.json<{ text: string }>();
-
-  if (!body.text || !body.text.trim()) {
-    return c.json({ error: '请输入记账文本' }, 400);
-  }
-
-  // 查询用户的所有账户和分类
-  const [accountsRes, categoriesRes, aiConfig] = await Promise.all([
-    db.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY sort_order ASC').bind(user.id).all<Account>(),
-    db.prepare('SELECT * FROM categories WHERE user_id = ? ORDER BY sort_order ASC').bind(user.id).all<Category>(),
-    getUserAiConfig(db, user.id),
-  ]);
-
-  const accounts = accountsRes.results || [];
-  const categories = categoriesRes.results || [];
-
   try {
+    const user = c.get('user');
+    const db = c.env.DB;
+    const body = await c.req.json<{ text: string }>();
+
+    if (!body.text || !body.text.trim()) {
+      return c.json({ error: '请输入记账文本' }, 400);
+    }
+
+    // 查询用户的所有账户和分类
+    const [accountsRes, categoriesRes, aiConfig] = await Promise.all([
+      db.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY sort_order ASC').bind(user.id).all<Account>(),
+      db.prepare('SELECT * FROM categories WHERE user_id = ? ORDER BY sort_order ASC').bind(user.id).all<Category>(),
+      getUserAiConfig(db, user.id),
+    ]);
+
+    const accounts = accountsRes.results || [];
+    const categories = categoriesRes.results || [];
+
     const result = await parseNaturalLanguageTransaction(
       c.env,
       aiConfig,
@@ -134,30 +134,31 @@ aiRouter.post('/parse-text', async (c) => {
     );
     return c.json({ result });
   } catch (err: any) {
+    console.error('parse-text error:', err);
     return c.json({ error: err.message || 'AI 解析文本失败' }, 500);
   }
 });
 
 // 4. 小票 / 发票 / 支付截图 OCR 智能解析
 aiRouter.post('/parse-receipt', async (c) => {
-  const user = c.get('user');
-  const db = c.env.DB;
-  const body = await c.req.json<{ image: string }>();
-
-  if (!body.image) {
-    return c.json({ error: '请上传小票或发票图片' }, 400);
-  }
-
-  const [accountsRes, categoriesRes, aiConfig] = await Promise.all([
-    db.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY sort_order ASC').bind(user.id).all<Account>(),
-    db.prepare('SELECT * FROM categories WHERE user_id = ? ORDER BY sort_order ASC').bind(user.id).all<Category>(),
-    getUserAiConfig(db, user.id),
-  ]);
-
-  const accounts = accountsRes.results || [];
-  const categories = categoriesRes.results || [];
-
   try {
+    const user = c.get('user');
+    const db = c.env.DB;
+    const body = await c.req.json<{ image: string }>();
+
+    if (!body.image) {
+      return c.json({ error: '请上传小票或发票图片' }, 400);
+    }
+
+    const [accountsRes, categoriesRes, aiConfig] = await Promise.all([
+      db.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY sort_order ASC').bind(user.id).all<Account>(),
+      db.prepare('SELECT * FROM categories WHERE user_id = ? ORDER BY sort_order ASC').bind(user.id).all<Category>(),
+      getUserAiConfig(db, user.id),
+    ]);
+
+    const accounts = accountsRes.results || [];
+    const categories = categoriesRes.results || [];
+
     const result = await parseReceiptImageTransaction(
       c.env,
       aiConfig,
@@ -167,6 +168,7 @@ aiRouter.post('/parse-receipt', async (c) => {
     );
     return c.json({ result });
   } catch (err: any) {
+    console.error('parse-receipt error:', err);
     return c.json({ error: err.message || 'AI 小票识别失败' }, 500);
   }
 });

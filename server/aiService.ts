@@ -34,16 +34,21 @@ function extractJsonFromResponse(raw: string): any {
  * 获取当前用户的 AI 配置
  */
 export async function getUserAiConfig(db: D1Database, userId: string): Promise<UserAiConfig | null> {
-  const row = await db
-    .prepare('SELECT * FROM user_ai_configs WHERE user_id = ?')
-    .bind(userId)
-    .first<any>();
+  try {
+    const row = await db
+      .prepare('SELECT * FROM user_ai_configs WHERE user_id = ?')
+      .bind(userId)
+      .first<any>();
 
-  if (!row) return null;
-  return {
-    ...row,
-    is_enabled: row.is_enabled === 1 ? 1 : 0,
-  };
+    if (!row) return null;
+    return {
+      ...row,
+      is_enabled: row.is_enabled === 1 ? 1 : 0,
+    };
+  } catch (err) {
+    console.warn('getUserAiConfig query failed (fallback to default null):', err);
+    return null;
+  }
 }
 
 /**
@@ -246,25 +251,46 @@ async function callVisionLlm(
     }
   }
 
-  // 2. Cloudflare Workers AI Vision 模型: @cf/meta/llama-3.2-11b-vision-instruct
+  // 2. Cloudflare Workers AI Vision 模型 (支持多模态容灾)
   if (env.AI) {
     try {
       // 提取纯 base64 字符串转成 uint8array 或直接传 base64 格式
-      const base64Pure = dataUrl.replace(/^data:image\/[a-z]+;base64,/, '');
+      const commaIdx = dataUrl.indexOf(',');
+      const base64Pure = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl;
       const binaryString = atob(base64Pure);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
+      const imageBytes = Array.from(bytes);
 
-      const visionRes = await env.AI.run('@cf/meta/llama-3.2-11b-vision-instruct', {
-        prompt: `${systemPrompt}\n\n${userPrompt}`,
-        image: [...bytes],
-      });
+      // 1. 优先尝试 Meta Llama 3.2 Vision 模型
+      try {
+        const visionRes = await env.AI.run('@cf/meta/llama-3.2-11b-vision-instruct', {
+          prompt: `${systemPrompt}\n\n${userPrompt}`,
+          image: imageBytes,
+        });
+        const responseText = visionRes?.response || (typeof visionRes === 'string' ? visionRes : null);
+        if (responseText) {
+          return { text: responseText, provider: 'workers_ai' };
+        }
+      } catch (llamaErr: any) {
+        console.warn('llama-3.2-11b-vision-instruct failed, trying llava-1.5-7b-hf:', llamaErr?.message || llamaErr);
+      }
 
-      const responseText = visionRes?.response || (typeof visionRes === 'string' ? visionRes : null);
-      if (responseText) {
-        return { text: responseText, provider: 'workers_ai' };
+      // 2. 备选尝试 LLaVA 视觉开源模型
+      try {
+        const llavaRes = await env.AI.run('@cf/llava-1.5-7b-hf', {
+          prompt: `${systemPrompt}\n\n${userPrompt}`,
+          image: imageBytes,
+          max_tokens: 512,
+        });
+        const responseText = llavaRes?.description || llavaRes?.response || (typeof llavaRes === 'string' ? llavaRes : null);
+        if (responseText) {
+          return { text: responseText, provider: 'workers_ai' };
+        }
+      } catch (llavaErr: any) {
+        console.warn('llava-1.5-7b-hf failed:', llavaErr?.message || llavaErr);
       }
     } catch (aiErr) {
       console.warn('Workers AI Vision error:', aiErr);
@@ -420,7 +446,9 @@ export async function parseReceiptImageTransaction(
   const visionResult = await callVisionLlm(env, userConfig, systemPrompt, userPrompt, imageBase64);
 
   if (!visionResult) {
-    throw new Error('当前未配置可用的大模型或视觉识别模型，无法进行图片识别。请在设置中配置自定义视觉模型（如 gpt-4o-mini）或启用 Workers AI。');
+    throw new Error(
+      '视觉模型暂时无法识别该小票。建议：1. 确认小票文字清晰且光线充足；2. 可在【设置 -> AI 大模型】中绑定自定义视觉模型（如 GPT-4o-mini、通义千问等）；3. 或直接切换至【自然语言/语音记账】一句话随手记。'
+    );
   }
 
   const parsed = extractJsonFromResponse(visionResult.text);

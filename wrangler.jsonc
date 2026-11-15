@@ -15,7 +15,8 @@
 		{
 			"binding": "DB",
 			"database_name": "cf_bookkeeping_db",
-			"database_id": "2e4890f8-4f49-4b78-9739-bcbac17dee9e"
+			"database_id": "2e4890f8-4f49-4b78-9739-bcbac17dee9e",
+			"migrations_dir": "d1/migrations"
 		}
 	],
 	"ai": {
