@@ -1,7 +1,10 @@
 import { Hono } from 'hono';
 import { Env, UserSession, Account, Category, Transaction, ItemWithStats, PrepaidCard, Subscription } from '../types';
+import { requireAuth } from '../auth';
 
 export const backupRouter = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
+
+backupRouter.use('*', requireAuth);
 
 /**
  * 辅助函数：CSV 字段转义 (处理双引号、逗号、换行)

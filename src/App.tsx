@@ -600,10 +600,10 @@ export function App() {
               onOpenImport={() => setIsImportModalOpen(true)}
               disableAllTips={guidePrefs.disableAllTips}
               onToggleDisableAllTips={(disabled) => {
-                setGuidePrefs(setDisableAllFeatureTips(user.id, disabled));
+                setGuidePrefs(setDisableAllFeatureTips(user?.id, disabled));
               }}
               onResetFeatureTips={() => {
-                setGuidePrefs(resetAllFeatureTips(user.id));
+                setGuidePrefs(resetAllFeatureTips(user?.id));
               }}
             />
           )}
@@ -924,16 +924,16 @@ export function App() {
             tip={activeFeatureTipKey ? FEATURE_TIPS[activeFeatureTipKey] : null}
             onDismissOnce={() => {
               if (!activeFeatureTipKey) return;
-              setGuidePrefs(markFeatureTipDismissed(user.id, activeFeatureTipKey));
+              setGuidePrefs(markFeatureTipDismissed(user?.id, activeFeatureTipKey));
               setActiveFeatureTipKey(null);
             }}
             onDisableForever={() => {
-              setGuidePrefs(setDisableAllFeatureTips(user.id, true));
+              setGuidePrefs(setDisableAllFeatureTips(user?.id, true));
               setActiveFeatureTipKey(null);
             }}
             onOpenFullGuide={(sectionId) => {
               if (activeFeatureTipKey) {
-                setGuidePrefs(markFeatureTipDismissed(user.id, activeFeatureTipKey));
+                setGuidePrefs(markFeatureTipDismissed(user?.id, activeFeatureTipKey));
               }
               setActiveFeatureTipKey(null);
               openGuideModal(sectionId);

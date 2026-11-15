@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { Env, UserSession, Account, Category } from '../types';
+import { requireAuth } from '../auth';
 import {
   getUserAiConfig,
   saveUserAiConfig,
@@ -9,6 +10,9 @@ import {
 } from '../aiService';
 
 export const aiRouter = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
+
+// 统一需要登录鉴权
+aiRouter.use('*', requireAuth);
 
 // 1. 获取用户的 AI 配置 (脱敏展示)
 aiRouter.get('/config', async (c) => {
