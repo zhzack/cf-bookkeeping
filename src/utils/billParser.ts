@@ -1,7 +1,7 @@
 import { Account, Category } from '../types';
 import { AutoRuleLike, matchAutoRules } from './ruleMatcher';
 
-export type BillProvider = 'wechat' | 'alipay';
+export type BillProvider = 'wechat' | 'alipay' | 'douyin';
 
 export interface ParsedBillRow {
   tempId: string;
@@ -274,11 +274,32 @@ function guessAccountId(
     if (exact) return exact.id;
     const partial = accounts.find((a) => pm.includes(a.name) || a.name.includes(pm));
     if (partial) return partial.id;
-    // 尾号匹配（如 招商银行信用卡(1391)）
-    const tailMatch = pm.match(/\((\d{4})\)/);
+    // 尾号匹配（支持中英文括号，如 招商银行信用卡(1391) / 浦发银行借记卡（9811））
+    const tailMatch = pm.match(/[（(](\d{4})[）)]/);
     if (tailMatch) {
       const byTail = accounts.find((a) => a.name.includes(tailMatch[1]));
       if (byTail) return byTail.id;
+    }
+    if (/信用卡/.test(pm)) {
+      const credit = accounts.find((a) => a.type === 'credit') || accounts.find((a) => a.type === 'bank');
+      if (credit) return credit.id;
+    }
+    if (/银行|储蓄|借记卡/.test(pm)) {
+      const bank = accounts.find((a) => a.type === 'bank') || accounts.find((a) => a.type === 'credit');
+      if (bank) return bank.id;
+    }
+    if (/抖音月付/.test(pm)) {
+      const dyMonthly =
+        accounts.find((a) => /抖音|月付/.test(a.name)) ||
+        accounts.find((a) => a.type === 'credit') ||
+        accounts.find((a) => a.type === 'other');
+      if (dyMonthly) return dyMonthly.id;
+    }
+    if (/抖音零钱|抖音支付/.test(pm)) {
+      const dyWallet =
+        accounts.find((a) => /抖音/.test(a.name)) ||
+        accounts.find((a) => a.type === 'other');
+      if (dyWallet) return dyWallet.id;
     }
     if (/微信|零钱/.test(pm)) {
       const wx = accounts.find((a) => a.type === 'wechat');
@@ -288,23 +309,22 @@ function guessAccountId(
       const ali = accounts.find((a) => a.type === 'alipay');
       if (ali) return ali.id;
     }
-    if (/信用卡/.test(pm)) {
-      const credit = accounts.find((a) => a.type === 'credit') || accounts.find((a) => a.type === 'bank');
-      if (credit) return credit.id;
-    }
-    if (/银行|储蓄|卡/.test(pm)) {
+    if (/卡/.test(pm)) {
       const bank = accounts.find((a) => a.type === 'bank') || accounts.find((a) => a.type === 'credit');
       if (bank) return bank.id;
     }
   }
-  const byProvider = accounts.find((a) => a.type === provider);
+  const byProvider =
+    provider === 'douyin'
+      ? accounts.find((a) => /抖音/.test(a.name))
+      : accounts.find((a) => a.type === provider);
   return byProvider?.id || fallbackId || accounts[0]?.id || '';
 }
 
 const IMPORT_CAT_RULES: Array<{ names: string[]; keywords: RegExp }> = [
   {
     names: ['餐饮', '美食'],
-    keywords: /(餐饮|美食|饿了么|美团|瑞幸|星巴克|库迪|麦当劳|肯德基|霸王茶姬|喜茶|奈雪|饭|面|粉|奶茶|咖啡|食堂|外卖|面包|火锅|烧烤)/i,
+    keywords: /(餐饮|美食|饿了么|美团|抖音生活服务|瑞幸|星巴克|库迪|麦当劳|肯德基|霸王茶姬|喜茶|奈雪|饭|面|粉|奶茶|咖啡|食堂|外卖|面包|火锅|烧烤)/i,
   },
   {
     names: ['交通', '出行'],
@@ -312,15 +332,15 @@ const IMPORT_CAT_RULES: Array<{ names: string[]; keywords: RegExp }> = [
   },
   {
     names: ['住房', '物业'],
-    keywords: /(房租|租金|物业|水费|电费|燃气|宽带|网费|话费|中国移动|中国联通|中国电信|供电|供暖|住房|家居)/i,
+    keywords: /(房租|租金|物业|水费|电费|燃气|宽带|网费|话费|手机充值|中国移动|中国联通|中国电信|供电|供暖|住房|家居)/i,
   },
   {
     names: ['日常', '百货', '购物'],
-    keywords: /(日用|百货|超市|便利店|7-11|全家|罗森|盒马|山姆|淘宝|拼多多|京东|购物|商城|菜鸟)/i,
+    keywords: /(日用|百货|超市|便利店|7-11|全家|罗森|盒马|山姆|淘宝|拼多多|京东|抖音电商|购物|商城|菜鸟)/i,
   },
   {
     names: ['数码', '电器'],
-    keywords: /(数码|电器|apple|苹果|小米|华为|电脑|手机|阿里云|腾讯云|cloudflare|软件|会员)/i,
+    keywords: /(数码|电器|apple|苹果|icloud|小米|华为|电脑|手机|阿里云|腾讯云|cloudflare|软件|会员)/i,
   },
   {
     names: ['休闲', '娱乐'],
@@ -443,10 +463,13 @@ export async function parseBillFile(
     matrix = await parseXlsxMatrix(buffer);
   } else if (name.endsWith('.csv') || name.endsWith('.txt')) {
     matrix = parseCsvMatrix(decodeCsvText(buffer));
+  } else if (name.endsWith('.pdf')) {
+    const { parsePdfMatrix } = await import('./pdfBillParser');
+    matrix = await parsePdfMatrix(buffer);
   } else if (name.endsWith('.zip')) {
-    throw new Error('检测到上传的是 .zip 压缩包，请先用邮箱/账单解压密码将里面的 .csv 或 .xlsx 解压出来后再上传');
+    throw new Error('检测到上传的是 .zip 压缩包，请先用邮箱/账单解压密码将里面的 .csv/.xlsx/.pdf 解压出来后再上传');
   } else {
-    throw new Error('请上传微信导出的 .xlsx/.csv 或支付宝导出的 .csv 账单文件');
+    throw new Error('请上传微信 (.xlsx/.csv)、支付宝 (.csv) 或抖音 (.pdf) 导出的官方账单文件');
   }
 
   // 查找表头行（前 50 行内同时包含时间、对方/商品、金额关键词）
@@ -464,17 +487,23 @@ export async function parseBillFile(
   }
 
   if (headerIdx < 0) {
-    throw new Error('未识别到微信或支付宝标准账单表头，请确认文件是微信/支付宝官方导出的明细对账单');
+    throw new Error('未识别到微信、支付宝或抖音标准账单表头，请确认文件为官方导出的明细对账单');
   }
 
   const headers = matrix[headerIdx].map((h) => h.trim());
   const topMeta = matrix.slice(0, headerIdx).flat().join(' ');
+  const isDouyin =
+    topMeta.includes('抖音支付') ||
+    topMeta.includes('抖音') ||
+    headers.includes('收/支/其他') ||
+    headers.includes('商家单号');
   const isWechat =
-    topMeta.includes('微信支付') ||
-    headers.includes('交易类型') ||
-    headers.includes('当前状态') ||
-    headers.includes('支付方式');
-  const provider: BillProvider = isWechat ? 'wechat' : 'alipay';
+    !isDouyin &&
+    (topMeta.includes('微信支付') ||
+      headers.includes('交易类型') ||
+      headers.includes('当前状态') ||
+      headers.includes('支付方式'));
+  const provider: BillProvider = isDouyin ? 'douyin' : isWechat ? 'wechat' : 'alipay';
 
   const col = (...names: string[]) => {
     for (const n of names) {
@@ -522,14 +551,18 @@ export async function parseBillFile(
     const tradeNo = idxTradeNo >= 0 ? (cells[idxTradeNo] || '').replace(/\t/g, '').trim() : '';
     const amountCents = Math.round(amountYuan * 100);
 
+    const idPrefix = provider === 'wechat' ? 'wx' : provider === 'douyin' ? 'dy' : 'ali';
     const externalId = tradeNo
-      ? `${provider === 'wechat' ? 'wx' : 'ali'}:${tradeNo}`
-      : `${provider}:${timeStr}:${amountCents}:${counterparty.slice(0, 16)}`;
+      ? `${idPrefix}:${tradeNo}`
+      : `${idPrefix}:${timeStr}:${amountCents}:${counterparty.slice(0, 16)}`;
 
-    const remarkParts = [counterparty, product, rawRemark]
+    const extraTag = provider === 'douyin' && payMethod === '退款' ? '退款' : '';
+    const remarkParts = [counterparty, product, extraTag, rawRemark]
       .filter((s) => s && s !== '/' && s !== '-')
       .filter((s, i, arr) => arr.indexOf(s) === i);
-    const remark = remarkParts.join(' · ').slice(0, 120) || (provider === 'wechat' ? '微信账单' : '支付宝账单');
+    const defaultBillName =
+      provider === 'wechat' ? '微信账单' : provider === 'douyin' ? '抖音账单' : '支付宝账单';
+    const remark = remarkParts.join(' · ').slice(0, 120) || defaultBillName;
 
     const txType: 'expense' | 'income' = isIncome ? 'income' : 'expense';
     const isClosed = /(交易关闭|已关闭|全额退款|支付失败|退款关闭)/.test(statusText);

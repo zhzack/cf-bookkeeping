@@ -1321,7 +1321,7 @@ transactionsRouter.post('/import', async (c) => {
       type !== 'transfer' && typeof row?.category_id === 'string' && categorySet.has(row.category_id)
         ? row.category_id
         : null;
-    const source = ['wechat', 'alipay', 'shortcut', 'manual'].includes(row?.source) ? row.source : 'manual';
+    const source = ['wechat', 'alipay', 'douyin', 'shortcut', 'manual'].includes(row?.source) ? row.source : 'manual';
     const remark = typeof row?.remark === 'string' && row.remark.trim() ? row.remark.trim().slice(0, 160) : null;
     const rowScene = normalizeScene(row?.scene);
     const id = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);

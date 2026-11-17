@@ -295,10 +295,10 @@ export const BillImportModal: React.FC<Props> = ({
             </div>
             <div>
               <h3 className="text-sm sm:text-base font-bold text-slate-800">
-                微信 / 支付宝账单批量导入
+                微信 / 支付宝 / 抖音账单批量导入
               </h3>
               <p className="text-[11px] text-slate-400">
-                支持微信 .xlsx/.csv 与支付宝 .csv（GBK/UTF-8 自动解码），按交易单号自动去重
+                支持微信 .xlsx/.csv、支付宝 .csv 与抖音支付 .pdf 流水证明，按交易单号自动去重
               </p>
             </div>
           </div>
@@ -356,7 +356,7 @@ export const BillImportModal: React.FC<Props> = ({
               >
                 <input
                   type="file"
-                  accept=".csv,.xlsx,.txt"
+                  accept=".csv,.xlsx,.txt,.pdf,application/pdf"
                   onChange={handleFileChange}
                   disabled={parsing}
                   className="hidden"
@@ -374,7 +374,7 @@ export const BillImportModal: React.FC<Props> = ({
                     <div className="text-sm font-bold text-slate-800">
                       {isDragging
                         ? '松开鼠标即可立即解析账单文件'
-                        : '拖拽账单文件到此处，或点击选择微信 (.xlsx/.csv) / 支付宝 (.csv)'}
+                        : '拖拽账单文件到此处，或点击选择微信 (.xlsx/.csv) / 支付宝 (.csv) / 抖音 (.pdf)'}
                     </div>
                     <p className="text-xs text-slate-400 max-w-md">
                       全程在浏览器本地解析，仅提交你确认勾选的交易流水；相同交易单号重复导入会自动跳过。
@@ -383,17 +383,23 @@ export const BillImportModal: React.FC<Props> = ({
                 )}
               </label>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                 <div className="p-3.5 rounded-2xl bg-emerald-50/60 border border-emerald-100 space-y-1">
-                  <div className="font-bold text-emerald-800">💬 微信账单导出路径</div>
+                  <div className="font-bold text-emerald-800">💬 微信账单导出</div>
                   <p className="text-emerald-900/80 leading-relaxed">
-                    微信 → 我 → 服务 → 钱包 → 账单 → 右上角「常见问题」→「下载账单」→「用于个人对账」，下载后用解压密码解压得到的 `.xlsx` 或 `.csv` 直接上传。
+                    微信 → 我 → 服务 → 钱包 → 账单 → 右上角「常见问题」→「下载账单」→「用于个人对账」，解压得到 `.xlsx` 或 `.csv` 直接上传。
                   </p>
                 </div>
                 <div className="p-3.5 rounded-2xl bg-sky-50/60 border border-sky-100 space-y-1">
-                  <div className="font-bold text-sky-800">💙 支付宝账单导出路径</div>
+                  <div className="font-bold text-sky-800">💙 支付宝账单导出</div>
                   <p className="text-sky-900/80 leading-relaxed">
-                    支付宝 → 我的 → 账单 → 右上角「...」→「开具交易流水证明」→「用于个人对账」，在邮箱解压后上传里面的 `alipay_record_xxxx.csv`。
+                    支付宝 → 我的 → 账单 → 右上角「...」→「开具交易流水证明」→「用于个人对账」，解压后上传 `alipay_record_xxxx.csv`。
+                  </p>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-slate-100/80 border border-slate-200 space-y-1">
+                  <div className="font-bold text-slate-800">🎵 抖音账单导出</div>
+                  <p className="text-slate-700 leading-relaxed">
+                    抖音 → 我 → 右上角「≡」→ 我的钱包 → 账单 → 右上角「...」→ 账单下载/流水证明，将导出的 `.pdf` 流水文件直接上传。
                   </p>
                 </div>
               </div>
@@ -407,10 +413,16 @@ export const BillImportModal: React.FC<Props> = ({
                     className={`px-2 py-0.5 rounded-md font-bold ${
                       provider === 'wechat'
                         ? 'bg-emerald-100 text-emerald-700'
+                        : provider === 'douyin'
+                        ? 'bg-slate-900 text-white'
                         : 'bg-sky-100 text-sky-700'
                     }`}
                   >
-                    {provider === 'wechat' ? '微信账单' : '支付宝账单'}
+                    {provider === 'wechat'
+                      ? '微信账单'
+                      : provider === 'douyin'
+                      ? '抖音账单'
+                      : '支付宝账单'}
                   </span>
                   <span className="text-slate-600">
                     共解析 <strong>{counts.total}</strong> 笔 · 新增待导{' '}

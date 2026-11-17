@@ -353,7 +353,7 @@ export const TransactionsView: React.FC<Props> = ({
                 type="button"
                 onClick={onOpenImport}
                 className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold flex items-center gap-1 transition"
-                title="导入微信或支付宝账单"
+                title="导入微信、支付宝或抖音账单"
               >
                 <Upload className="w-3.5 h-3.5" />
                 <span>导入账单</span>
