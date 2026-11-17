@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check, Trash2 } from 'lucide-react';
-import { fetchApi } from '../api';
+import { X, Check, Trash2, SlidersHorizontal } from 'lucide-react';
+import { fetchApi, formatCurrency } from '../api';
 import { Account } from '../types';
 
 interface Props {
@@ -39,7 +39,8 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
   const [name, setName] = useState('');
   const [type, setType] = useState('bank');
   const [currency, setCurrency] = useState('CNY');
-  const [initialBalanceStr, setInitialBalanceStr] = useState('0');
+  const [balanceMode, setBalanceMode] = useState<'current' | 'initial'>('initial');
+  const [balanceStr, setBalanceStr] = useState('0');
   const [color, setColor] = useState('#1677FF');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -49,19 +50,38 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
       setName(account.name);
       setType(account.type);
       setCurrency(account.currency || 'CNY');
-      setInitialBalanceStr((account.initial_balance / 100).toString());
+      setBalanceMode('current');
+      setBalanceStr((account.current_balance / 100).toFixed(2));
       setColor(account.color || '#1677FF');
     } else {
       setName('');
       setType('bank');
       setCurrency('CNY');
-      setInitialBalanceStr('0');
+      setBalanceMode('initial');
+      setBalanceStr('0');
       setColor('#1677FF');
     }
     setError('');
   }, [isOpen, account]);
 
   if (!isOpen) return null;
+
+  const txDeltaCents = account ? account.current_balance - account.initial_balance : 0;
+  const parsedVal = parseFloat(balanceStr);
+  const inputCents = !isNaN(parsedVal) ? Math.round(parsedVal * 100) : null;
+
+  const handleSwitchMode = (nextMode: 'current' | 'initial') => {
+    if (nextMode === balanceMode) return;
+    setBalanceMode(nextMode);
+    if (!account) return;
+    if (nextMode === 'current') {
+      const nextCurrent = inputCents !== null ? inputCents + txDeltaCents : account.current_balance;
+      setBalanceStr((nextCurrent / 100).toFixed(2));
+    } else {
+      const nextInitial = inputCents !== null ? inputCents - txDeltaCents : account.initial_balance;
+      setBalanceStr((nextInitial / 100).toFixed(2));
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,24 +90,34 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
       return;
     }
 
-    const initBal = parseFloat(initialBalanceStr);
-    if (isNaN(initBal)) {
-      setError('请输入有效的初始余额');
+    const balNum = parseFloat(balanceStr);
+    if (isNaN(balNum)) {
+      setError(balanceMode === 'current' ? '请输入有效的当前余额' : '请输入有效的初始余额');
       return;
     }
 
     setLoading(true);
     try {
-      const payload = {
-        name: name.trim(),
-        type,
-        currency,
-        initial_balance: Math.round(initBal * 100),
-        color,
-        icon: type,
-      };
-
+      const cents = Math.round(balNum * 100);
       if (account) {
+        const payload =
+          balanceMode === 'current'
+            ? {
+                name: name.trim(),
+                type,
+                currency,
+                target_current_balance: cents,
+                color,
+                icon: type,
+              }
+            : {
+                name: name.trim(),
+                type,
+                currency,
+                initial_balance: cents,
+                color,
+                icon: type,
+              };
         await fetchApi(`/api/accounts/${account.id}`, {
           method: 'PUT',
           body: JSON.stringify(payload),
@@ -95,7 +125,14 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
       } else {
         await fetchApi('/api/accounts', {
           method: 'POST',
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            name: name.trim(),
+            type,
+            currency,
+            initial_balance: cents,
+            color,
+            icon: type,
+          }),
         });
       }
 
@@ -123,6 +160,8 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
       setLoading(false);
     }
   };
+
+  const currencySymbol = CURRENCY_OPTIONS.find((c) => c.code === currency)?.symbol || '¥';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
@@ -176,34 +215,100 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">账户币种</label>
-              <select
-                value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-              >
-                {CURRENCY_OPTIONS.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">
-                初始金额 ({CURRENCY_OPTIONS.find((c) => c.code === currency)?.symbol || '¥'})
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1">账户币种</label>
+            <select
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            >
+              {CURRENCY_OPTIONS.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-slate-500 flex items-center gap-1">
+                {account && <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-500" />}
+                <span>
+                  {balanceMode === 'current'
+                    ? `设定当前实际余额 (${currencySymbol})`
+                    : `初始余额 (${currencySymbol})`}
+                </span>
               </label>
-              <input
-                type="number"
-                step="0.01"
-                placeholder="0.00"
-                value={initialBalanceStr}
-                onChange={(e) => setInitialBalanceStr(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-              />
+
+              {account && (
+                <div className="inline-flex bg-slate-100 p-0.5 rounded-lg text-[11px] font-medium">
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchMode('current')}
+                    className={`px-2 py-0.5 rounded-md transition ${
+                      balanceMode === 'current'
+                        ? 'bg-white text-indigo-600 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    设定当前值
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchMode('initial')}
+                    className={`px-2 py-0.5 rounded-md transition ${
+                      balanceMode === 'initial'
+                        ? 'bg-white text-indigo-600 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    初始值
+                  </button>
+                </div>
+              )}
             </div>
+
+            <input
+              type="number"
+              step="0.01"
+              placeholder="0.00（信用卡欠款可填负数）"
+              value={balanceStr}
+              onChange={(e) => setBalanceStr(e.target.value)}
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            />
+
+            {account && inputCents !== null && (
+              <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-100 text-[11px] text-indigo-900/80 leading-relaxed">
+                {balanceMode === 'current' ? (
+                  <>
+                    历史流水净变动：
+                    <strong className="text-indigo-700">
+                      {txDeltaCents >= 0 ? '+' : ''}
+                      {formatCurrency(txDeltaCents, false, currency)}
+                    </strong>
+                    ；保存后将自动反推初始余额为{' '}
+                    <strong className="text-indigo-700">
+                      {formatCurrency(inputCents - txDeltaCents, false, currency)}
+                    </strong>
+                    ，不会产生多余的收支记录。
+                  </>
+                ) : (
+                  <>
+                    历史流水净变动：
+                    <strong className="text-indigo-700">
+                      {txDeltaCents >= 0 ? '+' : ''}
+                      {formatCurrency(txDeltaCents, false, currency)}
+                    </strong>
+                    ；保存后当前余额将变为{' '}
+                    <strong className="text-indigo-700">
+                      {formatCurrency(inputCents + txDeltaCents, false, currency)}
+                    </strong>
+                    。
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex gap-2 pt-2">
@@ -223,7 +328,7 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
               className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-xl shadow-md shadow-indigo-200 flex items-center justify-center gap-1.5 transition disabled:opacity-60"
             >
               <Check className="w-4 h-4" />
-              <span>{loading ? '正在保存...' : '保存'}</span>
+              <span>{loading ? '正在保存...' : balanceMode === 'current' && account ? '保存并校准余额' : '保存'}</span>
             </button>
           </div>
         </form>
@@ -231,4 +336,3 @@ export const AccountModal: React.FC<Props> = ({ isOpen, onClose, onSuccess, acco
     </div>
   );
 };
-
