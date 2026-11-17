@@ -1,5 +1,5 @@
 import { Context, Next } from 'hono';
-import { getCookie } from 'hono/cookie';
+import { getCookie, deleteCookie } from 'hono/cookie';
 import { sign, verify } from 'hono/jwt';
 import { Env, UserSession } from './types';
 
@@ -64,33 +64,62 @@ export async function hashToken(rawToken: string): Promise<string> {
     .join('');
 }
 
-// 鉴权中间件（支持登录 Cookie/JWT 及快捷指令长期 API Token）
+// 提取请求中所有可能的鉴权 Token（按优先级依次尝试：Authorization 标头、URL 参数、Cookie）
+export function extractCandidateTokens(c: Context): string[] {
+  const candidates: string[] = [];
+
+  // 1. Authorization: Bearer <token>
+  const authHeader = c.req.header('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const val = authHeader.substring(7).trim();
+    if (val && !candidates.includes(val)) candidates.push(val);
+  }
+
+  // 2. URL query 中的 token 或 sso_token
+  const qToken = c.req.query('sso_token') || c.req.query('token');
+  if (qToken) {
+    const val = qToken.trim();
+    if (val && !candidates.includes(val)) candidates.push(val);
+  }
+
+  // 3. 解析 Cookie Header 中所有的 auth_token（处理跨子域同名 Cookie 冲突）
+  const cookieHeader = c.req.header('Cookie') || '';
+  if (cookieHeader) {
+    const parts = cookieHeader.split(';');
+    for (const part of parts) {
+      const eqIdx = part.indexOf('=');
+      if (eqIdx !== -1) {
+        const key = part.slice(0, eqIdx).trim();
+        const value = part.slice(eqIdx + 1).trim();
+        if (key === 'auth_token' && value && !candidates.includes(value)) {
+          candidates.push(value);
+        }
+      }
+    }
+  }
+
+  // 4. Hono getCookie 保底
+  const honoCookie = getCookie(c, 'auth_token');
+  if (honoCookie && !candidates.includes(honoCookie)) {
+    candidates.push(honoCookie);
+  }
+
+  return candidates;
+}
+
+// 鉴权中间件（支持多 Cookie 容错重试、URL SSO Token 及快捷指令长期 API Token）
 export async function requireAuth(c: Context<{ Bindings: Env; Variables: { user: UserSession } }>, next: Next) {
-  let token = getCookie(c, 'auth_token');
+  const candidates = extractCandidateTokens(c);
 
-  if (!token) {
-    const authHeader = c.req.header('Authorization');
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7).trim();
-    }
-  }
-
-  // 同时也支持 URL query 中的 token（用于直接下载 .shortcut 文件或链接触发）
-  if (!token) {
-    const queryToken = c.req.query('token');
-    if (queryToken) {
-      token = queryToken.trim();
-    }
-  }
-
-  if (!token) {
+  if (candidates.length === 0) {
     return c.json({ error: '未登录，请先登录' }, 401);
   }
 
   // 个人长期 API Token 认证（供 iOS 快捷指令 / 自动化调用）
-  if (token.startsWith('cbk_live_')) {
+  const cbkToken = candidates.find((t) => t.startsWith('cbk_live_'));
+  if (cbkToken) {
     try {
-      const tokenHash = await hashToken(token);
+      const tokenHash = await hashToken(cbkToken);
       const row = await c.env.DB.prepare(
         `SELECT t.id AS token_id, u.id, u.username, u.nickname
          FROM api_tokens t
@@ -127,35 +156,50 @@ export async function requireAuth(c: Context<{ Bindings: Env; Variables: { user:
     }
   }
 
-  try {
-    const jwtSecret = c.env.JWT_SECRET || DEFAULT_JWT_SECRET;
-    const payload = await verify(token, jwtSecret, 'HS256');
-    if (!payload || !payload.sub) {
-      return c.json({ error: '登录凭证无效或已过期' }, 401);
-    }
+  const jwtSecret = c.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+  let validPayload: any = null;
 
-    // 检查账号状态 (防封禁账号渗透)
-    if (payload.status === 'disabled') {
-      return c.json({ error: '该账号已被管理员封禁，无法访问记账系统' }, 403);
-    }
-
-    // 检查子系统授权矩阵
-    if (Array.isArray(payload.apps)) {
-      const isAllowed = payload.apps.includes('*') || payload.apps.includes('book');
-      if (!isAllowed) {
-        return c.json({ error: '您尚未获得访问记账与持物系统的权限，请联系管理员分配' }, 403);
+  for (const token of candidates) {
+    if (token.startsWith('cbk_live_')) continue;
+    try {
+      const payload = await verify(token, jwtSecret, 'HS256');
+      if (payload && payload.sub) {
+        validPayload = payload;
+        break;
       }
-    }
+    } catch {}
+  }
 
-    c.set('user', {
-      id: payload.sub as string,
-      username: (payload.username as string) || '',
-      nickname: (payload.nickname as string) || '',
-    });
-
-    await next();
-  } catch (err: any) {
+  if (!validPayload) {
     return c.json({ error: '登录凭证已过期，请重新登录' }, 401);
   }
+
+  // 检查账号状态 (防封禁账号渗透)
+  if (validPayload.status === 'disabled') {
+    return c.json({ error: '该账号已被管理员封禁，无法访问记账系统' }, 403);
+  }
+
+  // 检查子系统授权矩阵
+  if (Array.isArray(validPayload.apps)) {
+    const isAllowed = validPayload.apps.includes('*') || validPayload.apps.includes('book');
+    if (!isAllowed) {
+      return c.json({ error: '您尚未获得访问记账与持物系统的权限，请联系管理员分配' }, 403);
+    }
+  }
+
+  // 若当前请求中存在多个 auth_token Cookie（通常是历史残留的 host-only Cookie 与新的根域 SSO Cookie 冲突），
+  // 下发响应头清理残留的子域 Cookie，确保后续请求干净高效。
+  const cookieHeader = c.req.header('Cookie') || '';
+  if (cookieHeader.split('auth_token=').length > 2) {
+    deleteCookie(c, 'auth_token', { path: '/' });
+  }
+
+  c.set('user', {
+    id: validPayload.sub as string,
+    username: (validPayload.username as string) || '',
+    nickname: (validPayload.nickname as string) || '',
+  });
+
+  await next();
 }
 

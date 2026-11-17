@@ -146,6 +146,13 @@ export function App() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
+      const urlSsoToken = params.get('sso_token');
+      if (urlSsoToken) {
+        sessionStorage.setItem('sso_token', urlSsoToken);
+        params.delete('sso_token');
+        const newSearch = params.toString() ? `?${params.toString()}` : '';
+        window.history.replaceState(null, '', window.location.pathname + newSearch + window.location.hash);
+      }
       if (params.get('shortcut_pair') === '1' && params.get('token')) {
         setMobilePairToken(params.get('token'));
       }
@@ -160,6 +167,8 @@ export function App() {
       // 尝试获取当前登录用户
       try {
         const meRes = await fetchApi<{ user: User }>('/api/auth/me');
+        sessionStorage.removeItem('sso_redirect_count');
+        sessionStorage.removeItem('sso_redirect_time');
         setUser(meRes.user);
         setInitLoading(false);
         return;
@@ -171,6 +180,23 @@ export function App() {
 
         // 若处于主域/子域环境且未登录，自动跳转至统一 SSO 身份认证中心
         if (isB1uegreyDomain) {
+          const redirectCount = parseInt(sessionStorage.getItem('sso_redirect_count') || '0', 10);
+          const lastRedirectTime = parseInt(sessionStorage.getItem('sso_redirect_time') || '0', 10);
+          const isRapidLoop = Date.now() - lastRedirectTime < 6000 && redirectCount >= 2;
+
+          if (isRapidLoop) {
+            console.warn('检测到 SSO 快速重定向循环，已自动阻断并清除可能冲突的残留 Cookie。');
+            sessionStorage.removeItem('sso_redirect_count');
+            sessionStorage.removeItem('sso_token');
+            document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+            setUser(null);
+            setInitLoading(false);
+            return;
+          }
+
+          sessionStorage.setItem('sso_redirect_count', String(redirectCount + 1));
+          sessionStorage.setItem('sso_redirect_time', String(Date.now()));
+
           const redirectTarget = encodeURIComponent(window.location.href);
           window.location.href = `${ssoAuthUrl}/?redirect=${redirectTarget}`;
           return;
