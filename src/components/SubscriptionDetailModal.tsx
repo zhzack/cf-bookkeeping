@@ -3,6 +3,7 @@ import { X, CheckCircle2, Pause, Play, Edit3, Trash2, Calendar, Clock, CreditCar
 import { fetchApi, formatCurrency, formatDateTime } from '../api';
 import { SubscriptionWithStats, Transaction } from '../types';
 import { DynamicIcon } from './DynamicIcon';
+import { SubscriptionBillModal } from './SubscriptionBillModal';
 
 interface Props {
   isOpen: boolean;
@@ -24,7 +25,7 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
   const [sub, setSub] = useState<SubscriptionWithStats | null>(null);
   const [history, setHistory] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
-  const [billingLoading, setBillingLoading] = useState(false);
+  const [isBillModalOpen, setIsBillModalOpen] = useState(false);
   const [pauseLoading, setPauseLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -55,18 +56,9 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
 
   if (!isOpen) return null;
 
-  const handleBillNow = async () => {
+  const handleBillNow = () => {
     if (!sub) return;
-    setBillingLoading(true);
-    try {
-      await fetchApi(`/api/subscriptions/${sub.id}/bill-now`, { method: 'POST' });
-      await loadDetail(sub.id);
-      onRefreshParent();
-    } catch (err: any) {
-      alert(err.message || '扣款入账失败');
-    } finally {
-      setBillingLoading(false);
-    }
+    setIsBillModalOpen(true);
   };
 
   const handleTogglePause = async () => {
@@ -237,12 +229,21 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
               {/* Action Toolbar */}
               <div className="grid grid-cols-3 gap-2">
                 <button
-                  disabled={billingLoading}
                   onClick={handleBillNow}
-                  className="py-2.5 px-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm shadow-indigo-600/20 disabled:opacity-50"
+                  className={`py-2.5 px-2 text-white rounded-2xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm ${
+                    sub.type === 'income'
+                      ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                      : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/20'
+                  }`}
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>{billingLoading ? '入账中...' : '立即记入一期'}</span>
+                  <span>
+                    {sub.auto_record === 0
+                      ? sub.type === 'income'
+                        ? '填写实发入账'
+                        : '填写实付记账'
+                      : '立即记入一期'}
+                  </span>
                 </button>
 
                 <button
@@ -329,6 +330,16 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
           )}
         </div>
       </div>
+
+      <SubscriptionBillModal
+        isOpen={isBillModalOpen}
+        subscription={sub}
+        onClose={() => setIsBillModalOpen(false)}
+        onSuccess={() => {
+          if (sub) loadDetail(sub.id);
+          onRefreshParent();
+        }}
+      />
     </div>
   );
 };

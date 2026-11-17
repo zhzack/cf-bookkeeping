@@ -84,16 +84,31 @@ function getTodayUtc8(): string {
   return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
-// 执行单笔周期入账/扣款操作，并自动滚动下一次日期
+// 执行单笔周期入账/扣款操作，并自动滚动下一次日期（支持浮动金额自定义本期金额与备注）
 export async function processSingleSubscriptionBilling(
   db: D1Database,
   sub: Subscription,
-  billingDateStr: string
-): Promise<{ transaction_id: string; next_billing_date: string }> {
+  billingDateStr: string,
+  overrides?: {
+    amount?: number;
+    remark?: string | null;
+    updateDefaultAmount?: boolean;
+  }
+): Promise<{ transaction_id: string; next_billing_date: string; amount: number }> {
   const txId = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
   const txTime = `${billingDateStr} 09:00:00`;
   const txType: 'expense' | 'income' = sub.type === 'income' ? 'income' : 'expense';
   const remarkPrefix = txType === 'income' ? '[周期入账]' : '[周期扣费]';
+
+  const finalAmount =
+    overrides?.amount !== undefined && Number.isFinite(overrides.amount) && overrides.amount > 0
+      ? Math.round(overrides.amount)
+      : sub.amount;
+
+  const customRemark = overrides?.remark && overrides.remark.trim() ? overrides.remark.trim() : '';
+  const finalRemark = customRemark
+    ? `${remarkPrefix} ${sub.name} · ${customRemark}`.slice(0, 160)
+    : `${remarkPrefix} ${sub.name}`;
 
   // 获取有效账户 (若无则取首个账户)
   let accountId = sub.account_id;
@@ -114,23 +129,31 @@ export async function processSingleSubscriptionBilling(
     txId,
     sub.user_id,
     txType,
-    sub.amount,
+    finalAmount,
     accountId,
     sub.category_id || null,
     txTime,
-    `${remarkPrefix} ${sub.name}`,
+    finalRemark,
     sub.id
   ).run();
 
-  // 计算并更新下个日期
+  // 计算并更新下个日期（若勾选同步更新参考金额，则一并更新 amount）
   const nextBilling = computeNextBillingDate(sub.next_billing_date, sub.period_type, sub.period_interval);
-  await db.prepare(
-    `UPDATE subscriptions
-     SET next_billing_date = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).bind(nextBilling, sub.id).run();
+  if (overrides?.updateDefaultAmount && finalAmount > 0) {
+    await db.prepare(
+      `UPDATE subscriptions
+       SET next_billing_date = ?, amount = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).bind(nextBilling, finalAmount, sub.id).run();
+  } else {
+    await db.prepare(
+      `UPDATE subscriptions
+       SET next_billing_date = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).bind(nextBilling, sub.id).run();
+  }
 
-  return { transaction_id: txId, next_billing_date: nextBilling };
+  return { transaction_id: txId, next_billing_date: nextBilling, amount: finalAmount };
 }
 
 // 自动扫描并处理到期且开启自动记账的周期项 (Cron / 请求随路自动触发)
@@ -287,6 +310,7 @@ subscriptionsRouter.post('/', async (c) => {
     remark,
     record_first_bill_now = false,
     backfill_past_periods = false,
+    custom_backfill_entries,
   } = body;
 
   const subType: 'expense' | 'income' = type === 'income' ? 'income' : 'expense';
@@ -322,20 +346,44 @@ subscriptionsRouter.post('/', async (c) => {
   }
 
   let nextBilling = firstDate;
-  const txDatesToInsert: string[] = [];
+  const entriesToInsert: Array<{ date: string; amount: number; remark?: string }> = [];
 
-  if (backfill_past_periods && firstDate <= todayStr) {
+  if (Array.isArray(custom_backfill_entries) && custom_backfill_entries.length > 0) {
+    // 浮动金额逐期历史补录（每期独立日期与实发/实付金额，上限 60 期）
+    const validCustom = custom_backfill_entries
+      .slice(0, 60)
+      .filter((it: any) => it && typeof it.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(it.date) && Number(it.amount) > 0)
+      .sort((a: any, b: any) => a.date.localeCompare(b.date));
+
+    for (const it of validCustom) {
+      entriesToInsert.push({
+        date: it.date,
+        amount: Math.round(Number(it.amount)),
+        remark: typeof it.remark === 'string' ? it.remark.trim() : undefined,
+      });
+    }
+    if (entriesToInsert.length > 0) {
+      // 下次日期顺延到大于 todayStr 的下一个周期点
+      let cursor = entriesToInsert[entriesToInsert.length - 1].date;
+      let safety = 0;
+      do {
+        cursor = computeNextBillingDate(cursor, period_type, intervalNum);
+        safety++;
+      } while (cursor <= todayStr && safety < 60);
+      nextBilling = cursor;
+    }
+  } else if (backfill_past_periods && firstDate <= todayStr) {
     // 从首期日期逐期补录直至今天（最多 60 期防误输入过早年份）
     let cursor = firstDate;
     let safety = 0;
     while (cursor <= todayStr && safety < 60) {
-      txDatesToInsert.push(cursor);
+      entriesToInsert.push({ date: cursor, amount: numAmount });
       cursor = computeNextBillingDate(cursor, period_type, intervalNum);
       safety++;
     }
     nextBilling = cursor;
   } else if (record_first_bill_now) {
-    txDatesToInsert.push(firstDate);
+    entriesToInsert.push({ date: firstDate, amount: numAmount });
     nextBilling = computeNextBillingDate(firstDate, period_type, intervalNum);
   }
 
@@ -366,11 +414,14 @@ subscriptionsRouter.post('/', async (c) => {
   ).run();
 
   let firstTxId: string | null = null;
-  if (txDatesToInsert.length > 0 && resolvedAccountId) {
+  if (entriesToInsert.length > 0 && resolvedAccountId) {
     const stmts: D1PreparedStatement[] = [];
-    for (const dt of txDatesToInsert) {
+    for (const item of entriesToInsert) {
       const txId = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
       if (!firstTxId) firstTxId = txId;
+      const rowRemark = item.remark
+        ? `${remarkPrefix} ${name.trim()} · ${item.remark}`.slice(0, 160)
+        : `${remarkPrefix} ${name.trim()}`;
       stmts.push(
         c.env.DB.prepare(
           `INSERT INTO transactions (
@@ -381,11 +432,11 @@ subscriptionsRouter.post('/', async (c) => {
           txId,
           user.id,
           subType,
-          numAmount,
+          item.amount,
           resolvedAccountId,
           category_id || null,
-          `${dt} 09:00:00`,
-          `${remarkPrefix} ${name.trim()}`,
+          `${item.date} 09:00:00`,
+          rowRemark,
           subId
         )
       );
@@ -397,13 +448,13 @@ subscriptionsRouter.post('/', async (c) => {
     {
       id: subId,
       message:
-        txDatesToInsert.length > 1
-          ? `创建成功，已自动补录 ${txDatesToInsert.length} 期历史流水`
+        entriesToInsert.length > 1
+          ? `创建成功，已自动补录 ${entriesToInsert.length} 期历史流水`
           : subType === 'income'
           ? '周期收入创建成功'
           : '订阅创建成功',
       first_transaction_id: firstTxId,
-      backfilled_count: txDatesToInsert.length,
+      backfilled_count: entriesToInsert.length,
     },
     201
   );
@@ -505,7 +556,7 @@ subscriptionsRouter.delete('/:id', async (c) => {
   return c.json({ message: '订阅已删除' });
 });
 
-// 6. 立即入账一期 (供待确认打勾或提前续费)
+// 6. 立即入账一期 (支持浮动金额：可传入本期实际到账金额、实际日期与备注)
 subscriptionsRouter.post('/:id/bill-now', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
@@ -514,13 +565,41 @@ subscriptionsRouter.post('/:id/bill-now', async (c) => {
     'SELECT * FROM subscriptions WHERE id = ? AND user_id = ?'
   ).bind(id, user.id).first<Subscription>();
   if (!sub) {
-    return c.json({ error: '未找到该订阅' }, 404);
+    return c.json({ error: '未找到该周期项目' }, 404);
+  }
+
+  let body: {
+    amount?: number;
+    billing_date?: string;
+    remark?: string;
+    update_default_amount?: boolean;
+  } = {};
+  try {
+    const text = await c.req.text();
+    if (text && text.trim()) {
+      body = JSON.parse(text);
+    }
+  } catch {
+    body = {};
+  }
+
+  if (body.amount !== undefined && (!Number.isFinite(Number(body.amount)) || Number(body.amount) <= 0)) {
+    return c.json({ error: '本期入账金额必须大于 0' }, 400);
   }
 
   const todayStr = getTodayUtc8();
-  const billingDate = sub.next_billing_date <= todayStr ? sub.next_billing_date : todayStr;
+  const billingDate =
+    body.billing_date && /^\d{4}-\d{2}-\d{2}$/.test(body.billing_date)
+      ? body.billing_date
+      : sub.next_billing_date <= todayStr
+      ? sub.next_billing_date
+      : todayStr;
 
-  const res = await processSingleSubscriptionBilling(c.env.DB, sub, billingDate);
+  const res = await processSingleSubscriptionBilling(c.env.DB, sub, billingDate, {
+    amount: body.amount !== undefined ? Math.round(Number(body.amount)) : undefined,
+    remark: body.remark,
+    updateDefaultAmount: Boolean(body.update_default_amount),
+  });
   const actionLabel = sub.type === 'income' ? '入账' : '扣款';
 
   return c.json({

@@ -85,6 +85,7 @@ export const SubscriptionModal: React.FC<Props> = ({
   const [autoRecord, setAutoRecord] = useState(true);
   const [recordFirstBillNow, setRecordFirstBillNow] = useState(false);
   const [backfillPastPeriods, setBackfillPastPeriods] = useState(false);
+  const [customPeriodAmounts, setCustomPeriodAmounts] = useState<Record<string, string>>({});
   const [color, setColor] = useState('#3b82f6');
   const [icon, setIcon] = useState('Calendar');
   const [remark, setRemark] = useState('');
@@ -125,6 +126,7 @@ export const SubscriptionModal: React.FC<Props> = ({
       setAutoRecord(subscriptionToEdit.auto_record === 1);
       setRecordFirstBillNow(false);
       setBackfillPastPeriods(false);
+      setCustomPeriodAmounts({});
       setColor(subscriptionToEdit.color || (t === 'income' ? '#10b981' : '#3b82f6'));
       setIcon(subscriptionToEdit.icon || (t === 'income' ? 'Briefcase' : 'Calendar'));
       setRemark(subscriptionToEdit.remark || '');
@@ -143,6 +145,7 @@ export const SubscriptionModal: React.FC<Props> = ({
       setAutoRecord(true);
       setRecordFirstBillNow(false);
       setBackfillPastPeriods(false);
+      setCustomPeriodAmounts({});
       setColor(t === 'income' ? '#10b981' : '#3b82f6');
       setIcon(t === 'income' ? 'Briefcase' : 'Calendar');
       setRemark('');
@@ -164,18 +167,29 @@ export const SubscriptionModal: React.FC<Props> = ({
     }
   };
 
-  // 计算如果选择“历史补录至今”，会补录多少期
-  const backfillPreviewCount = useMemo(() => {
-    if (isEdit || !firstBillingDate || firstBillingDate > todayStr) return 0;
+  // 计算如果选择“历史补录至今”，会补录哪些日期
+  const backfillDates = useMemo(() => {
+    if (isEdit || !firstBillingDate || firstBillingDate > todayStr) return [] as string[];
+    const dates: string[] = [];
     let cursor = firstBillingDate;
-    let count = 0;
     const step = Math.max(1, parseInt(periodInterval) || 1);
-    while (cursor <= todayStr && count < 60) {
-      count++;
+    while (cursor <= todayStr && dates.length < 60) {
+      dates.push(cursor);
       cursor = nextDatePreview(cursor, periodType, step);
     }
-    return count;
+    return dates;
   }, [isEdit, firstBillingDate, todayStr, periodType, periodInterval]);
+
+  const backfillPreviewCount = backfillDates.length;
+
+  const backfillTotalYuan = useMemo(() => {
+    const baseAmt = parseFloat(amountYuan) || 0;
+    return backfillDates.reduce((sum, dt) => {
+      const raw = customPeriodAmounts[dt];
+      const v = raw !== undefined && raw !== '' ? parseFloat(raw) : baseAmt;
+      return sum + (isNaN(v) ? 0 : Math.max(0, v));
+    }, 0);
+  }, [backfillDates, customPeriodAmounts, amountYuan]);
 
   if (!isOpen) return null;
 
@@ -230,6 +244,23 @@ export const SubscriptionModal: React.FC<Props> = ({
           }),
         });
       } else {
+        let customBackfillEntries: Array<{ date: string; amount: number }> | undefined;
+        if (backfillPastPeriods && backfillDates.length > 0) {
+          const hasCustomOverride = backfillDates.some((dt) => {
+            const raw = customPeriodAmounts[dt];
+            return raw !== undefined && raw !== '';
+          });
+          if (hasCustomOverride || !autoRecord) {
+            customBackfillEntries = backfillDates
+              .map((dt) => {
+                const raw = customPeriodAmounts[dt];
+                const yuan = raw !== undefined && raw !== '' ? parseFloat(raw) : numAmount;
+                return { date: dt, amount: Math.round((isNaN(yuan) ? 0 : yuan) * 100) };
+              })
+              .filter((e) => e.amount > 0);
+          }
+        }
+
         await fetchApi('/api/subscriptions', {
           method: 'POST',
           body: JSON.stringify({
@@ -248,6 +279,7 @@ export const SubscriptionModal: React.FC<Props> = ({
             remark: remark.trim() || null,
             record_first_bill_now: backfillPastPeriods ? false : recordFirstBillNow,
             backfill_past_periods: backfillPastPeriods,
+            custom_backfill_entries: customBackfillEntries,
           }),
         });
       }
@@ -378,7 +410,13 @@ export const SubscriptionModal: React.FC<Props> = ({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] text-slate-500 mb-1 font-medium">
-                  {isIncome ? '每期入账金额 (元)' : '每期金额 (元)'}
+                  {!autoRecord
+                    ? isIncome
+                      ? '参考/预估月薪 (元)'
+                      : '参考/预估金额 (元)'
+                    : isIncome
+                    ? '每期固定入账金额 (元)'
+                    : '每期金额 (元)'}
                 </label>
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">¥</span>
@@ -451,49 +489,108 @@ export const SubscriptionModal: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* 自动记账与历史补录选项 */}
-          <div className="border border-slate-200/80 rounded-2xl p-3.5 space-y-2.5">
-            <label className="flex items-start gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={autoRecord}
-                onChange={(e) => setAutoRecord(e.target.checked)}
-                className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
-              />
-              <div>
-                <div className="text-xs font-bold text-slate-800">
-                  {isIncome ? '发薪日自动生成收入流水 (推荐开启)' : '到期自动生成支出流水 (推荐开启)'}
-                </div>
-                <div className="text-[11px] text-slate-400 mt-0.5">
-                  开启后系统由 Cloudflare 定时任务在到期日自动记账；取消则在看板中提供「待确认」按钮供您手动入账
-                </div>
+          {/* 金额模式（固定自动 vs 浮动实填）与历史补录选项 */}
+          <div className="border border-slate-200/80 rounded-2xl p-3.5 space-y-3">
+            <div>
+              <div className="text-xs font-bold text-slate-700 mb-2">金额模式与入账方式</div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setAutoRecord(true)}
+                  className={`p-2.5 rounded-xl border text-left transition ${
+                    autoRecord
+                      ? 'border-indigo-500 bg-indigo-50/70 text-indigo-800 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="font-bold">固定金额 · 自动入账</div>
+                  <div className="text-[10px] opacity-75 mt-0.5 leading-snug">
+                    每期金额一致，到期由系统定时自动记账
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAutoRecord(false)}
+                  className={`p-2.5 rounded-xl border text-left transition ${
+                    !autoRecord
+                      ? 'border-amber-500 bg-amber-50/70 text-amber-900 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="font-bold">浮动金额 · 实发手填</div>
+                  <div className="text-[10px] opacity-75 mt-0.5 leading-snug">
+                    {isIncome
+                      ? '每月含绩效/加班/个税实发不同，到账时填真实金额'
+                      : '每期费用浮动（如水电费），扣款时填真实金额'}
+                  </div>
+                </button>
               </div>
-            </label>
+            </div>
 
-            {!isEdit && backfillPreviewCount > 1 && (
-              <label className="flex items-start gap-2 cursor-pointer select-none pt-2 border-t border-slate-100">
-                <input
-                  type="checkbox"
-                  checked={backfillPastPeriods}
-                  onChange={(e) => {
-                    setBackfillPastPeriods(e.target.checked);
-                    if (e.target.checked) setRecordFirstBillNow(false);
-                  }}
-                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
-                />
-                <div>
-                  <div className="text-xs font-bold text-emerald-700">
-                    一键补录从 {firstBillingDate} 至今的 {backfillPreviewCount} 期历史流水
-                    {numAmt > 0 && `（共 ¥${(numAmt * backfillPreviewCount).toFixed(2)}）`}
+            {!isEdit && backfillPreviewCount >= 1 && (
+              <div className="pt-2 border-t border-slate-100 space-y-2.5">
+                <label className="flex items-start gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={backfillPastPeriods}
+                    onChange={(e) => {
+                      setBackfillPastPeriods(e.target.checked);
+                      if (e.target.checked) setRecordFirstBillNow(false);
+                    }}
+                    className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <div>
+                    <div className="text-xs font-bold text-emerald-700">
+                      一键补录从 {firstBillingDate} 至今的 {backfillPreviewCount} 期历史流水
+                      {backfillTotalYuan > 0 && `（合计 ¥${backfillTotalYuan.toFixed(2)}）`}
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      {!autoRecord
+                        ? '勾选后可在下方逐月填入每期实际到账金额，未修改的期数默认按参考金额入账'
+                        : '适合补充过去几个月的固定发薪或房租记录，补录后自动从下个未来日期开始执行'}
+                    </div>
                   </div>
-                  <div className="text-[11px] text-slate-400 mt-0.5">
-                    适合补充过去几个月的固定发薪或房租记录，补录后自动从下个未来日期开始按期执行
+                </label>
+
+                {backfillPastPeriods && (
+                  <div className="bg-slate-50 rounded-xl border border-slate-200/80 p-2.5 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold px-1">
+                      <span>逐期实际金额明细（可直接逐月修改）</span>
+                      <span className="text-emerald-700 font-bold">共 ¥{backfillTotalYuan.toFixed(2)}</span>
+                    </div>
+                    <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                      {backfillDates.map((dt) => (
+                        <div
+                          key={dt}
+                          className="flex items-center justify-between gap-2 bg-white px-2.5 py-1.5 rounded-lg border border-slate-100"
+                        >
+                          <span className="text-xs font-medium text-slate-600 tabular-nums">{dt}</span>
+                          <div className="relative w-32">
+                            <span className="absolute left-2 top-1.5 text-[11px] text-slate-400 font-bold">¥</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder={amountYuan || '0.00'}
+                              value={customPeriodAmounts[dt] ?? ''}
+                              onChange={(e) =>
+                                setCustomPeriodAmounts((prev) => ({
+                                  ...prev,
+                                  [dt]: e.target.value,
+                                }))
+                              }
+                              className="w-full pl-5 pr-2 py-1 text-xs font-bold text-right rounded-md border border-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              </label>
+                )}
+              </div>
             )}
 
-            {!isEdit && !backfillPastPeriods && (
+            {!isEdit && !backfillPastPeriods && backfillPreviewCount === 0 && (
               <label className="flex items-start gap-2 cursor-pointer select-none pt-2 border-t border-slate-100">
                 <input
                   type="checkbox"

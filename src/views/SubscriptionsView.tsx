@@ -19,6 +19,7 @@ import {
 import { fetchApi, formatCurrency } from '../api';
 import { SubscriptionWithStats, SubscriptionsSummary, Account, Category } from '../types';
 import { DynamicIcon } from '../components/DynamicIcon';
+import { SubscriptionBillModal } from '../components/SubscriptionBillModal';
 
 interface Props {
   accounts: Account[];
@@ -45,6 +46,7 @@ export const SubscriptionsView: React.FC<Props> = ({
   const [filterType, setFilterType] = useState<'all' | 'income' | 'monthly' | 'yearly' | 'other' | 'paused'>('all');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  const [billingSub, setBillingSub] = useState<SubscriptionWithStats | null>(null);
 
   const loadSubscriptions = async () => {
     setLoading(true);
@@ -65,23 +67,9 @@ export const SubscriptionsView: React.FC<Props> = ({
     loadSubscriptions();
   }, [refreshTrigger]);
 
-  const handleBillNow = async (e: React.MouseEvent, sub: SubscriptionWithStats) => {
+  const handleBillNow = (e: React.MouseEvent, sub: SubscriptionWithStats) => {
     e.stopPropagation();
-    if (!window.confirm(`确认立即为【${sub.name}】入账 ¥${(sub.amount / 100).toFixed(2)} 吗？`)) {
-      return;
-    }
-    setActionLoadingId(sub.id);
-    try {
-      await fetchApi(`/api/subscriptions/${sub.id}/bill-now`, {
-        method: 'POST',
-      });
-      await loadSubscriptions();
-      onRefreshParent();
-    } catch (err: any) {
-      alert(err.message || '记账失败');
-    } finally {
-      setActionLoadingId(null);
-    }
+    setBillingSub(sub);
   };
 
   const handleTogglePause = async (e: React.MouseEvent, sub: SubscriptionWithStats) => {
@@ -441,7 +429,13 @@ export const SubscriptionsView: React.FC<Props> = ({
                   <div className="mt-3 pt-3 border-t border-slate-50 flex items-baseline justify-between">
                     <div>
                       <div className="text-xs text-slate-400 font-medium">
-                        {isIncome ? '每期入账' : '每期扣款'}
+                        {sub.auto_record === 0
+                          ? isIncome
+                            ? '参考入账（浮动）'
+                            : '参考扣款（浮动）'
+                          : isIncome
+                          ? '每期入账'
+                          : '每期扣款'}
                       </div>
                       <div
                         className={`text-lg font-black mt-0.5 ${
@@ -485,7 +479,7 @@ export const SubscriptionsView: React.FC<Props> = ({
                     ) : (
                       <span className="inline-flex items-center gap-1 text-amber-700 font-semibold bg-amber-50 px-1.5 py-0.5 rounded">
                         <HandMetal className="w-3 h-3" />
-                        <span>手动确认</span>
+                        <span>浮动实填</span>
                       </span>
                     )}
                     <span className="text-slate-300">|</span>
@@ -493,16 +487,28 @@ export const SubscriptionsView: React.FC<Props> = ({
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    {/* 快捷入账按钮 */}
-                    {isDueOrPending && !isPaused && (
+                    {/* 快捷入账按钮：到期必显，浮动金额（auto_record=0）随时可点填实发 */}
+                    {(isDueOrPending || sub.auto_record === 0) && !isPaused && (
                       <button
                         type="button"
                         onClick={(e) => handleBillNow(e, sub)}
                         disabled={actionLoadingId === sub.id}
-                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-bold rounded-lg text-[11px] shadow-sm transition flex items-center gap-1"
+                        className={`px-2.5 py-1 active:scale-95 font-bold rounded-lg text-[11px] shadow-sm transition flex items-center gap-1 ${
+                          isDueOrPending
+                            ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                            : isIncome
+                            ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/80'
+                            : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80'
+                        }`}
                       >
                         <CheckCircle2 className="w-3 h-3" />
-                        <span>立即入账</span>
+                        <span>
+                          {sub.auto_record === 0
+                            ? isIncome
+                              ? '填实发入账'
+                              : '填实付记账'
+                            : '立即入账'}
+                        </span>
                       </button>
                     )}
 
@@ -525,6 +531,16 @@ export const SubscriptionsView: React.FC<Props> = ({
           })}
         </div>
       )}
+
+      <SubscriptionBillModal
+        isOpen={Boolean(billingSub)}
+        subscription={billingSub}
+        onClose={() => setBillingSub(null)}
+        onSuccess={() => {
+          loadSubscriptions();
+          onRefreshParent();
+        }}
+      />
     </div>
   );
 };
