@@ -5,41 +5,7 @@ import { hashPassword, hashToken, verifyPassword, createSessionToken, requireAut
 
 export const authRouter = new Hono<{ Bindings: Env; Variables: { user: UserSession } }>();
 
-// 检查是否需要初次设置管理员
-authRouter.get('/status', async (c) => {
-  try {
-    const row = await c.env.DB.prepare('SELECT COUNT(*) as count FROM users').first<{ count: number }>();
-    const count = row?.count || 0;
-    return c.json({ needSetup: count === 0 });
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500);
-  }
-});
-
-// 首次安装设置管理员账号
-authRouter.post('/setup', async (c) => {
-  const row = await c.env.DB.prepare('SELECT COUNT(*) as count FROM users').first<{ count: number }>();
-  if ((row?.count || 0) > 0) {
-    return c.json({ error: '系统已初始化，禁止重复设置' }, 400);
-  }
-
-  const { username, password, nickname } = await c.req.json();
-  if (!username || !password) {
-    return c.json({ error: '用户名和密码不能为空' }, 400);
-  }
-  if (password.length < 6) {
-    return c.json({ error: '密码长度至少为 6 位' }, 400);
-  }
-
-  const userId = 'usr_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-  const { hash, salt } = await hashPassword(password);
-  const finalNickname = nickname?.trim() || username;
-
-  // 插入用户
-  await c.env.DB.prepare(
-    'INSERT INTO users (id, username, password_hash, salt, nickname) VALUES (?, ?, ?, ?, ?)'
-  ).bind(userId, username.trim(), hash, salt, finalNickname).run();
-
+export async function initDefaultUserData(db: D1Database, userId: string) {
   // 为新用户初始化预置常用账户
   const defaultAccounts = [
     { name: '微信钱包', type: 'wechat', icon: 'wechat', color: '#07C160', sort: 1 },
@@ -50,7 +16,7 @@ authRouter.post('/setup', async (c) => {
 
   for (const acc of defaultAccounts) {
     const accId = 'acc_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-    await c.env.DB.prepare(
+    await db.prepare(
       'INSERT INTO accounts (id, user_id, name, type, icon, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).bind(accId, userId, acc.name, acc.type, acc.icon, acc.color, acc.sort).run();
   }
@@ -80,17 +46,59 @@ authRouter.post('/setup', async (c) => {
   let catSort = 1;
   for (const cat of defaultExpenseCategories) {
     const catId = 'cat_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-    await c.env.DB.prepare(
+    await db.prepare(
       'INSERT INTO categories (id, user_id, name, type, icon, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).bind(catId, userId, cat.name, 'expense', cat.icon, cat.color, catSort++).run();
   }
 
   for (const cat of defaultIncomeCategories) {
     const catId = 'cat_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-    await c.env.DB.prepare(
+    await db.prepare(
       'INSERT INTO categories (id, user_id, name, type, icon, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).bind(catId, userId, cat.name, 'income', cat.icon, cat.color, catSort++).run();
   }
+}
+
+// 检查是否需要初次设置管理员
+authRouter.get('/status', async (c) => {
+  try {
+    const row = await c.env.DB.prepare('SELECT COUNT(*) as count FROM users').first<{ count: number }>();
+    const count = row?.count || 0;
+    return c.json({ 
+      needSetup: count === 0,
+      ssoAuthUrl: c.env.AUTH_URL || 'https://auth.b1uegrey.xyz'
+    });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+// 首次安装设置管理员账号
+authRouter.post('/setup', async (c) => {
+  const row = await c.env.DB.prepare('SELECT COUNT(*) as count FROM users').first<{ count: number }>();
+  if ((row?.count || 0) > 0) {
+    return c.json({ error: '系统已初始化，禁止重复设置' }, 400);
+  }
+
+  const { username, password, nickname } = await c.req.json();
+  if (!username || !password) {
+    return c.json({ error: '用户名和密码不能为空' }, 400);
+  }
+  if (password.length < 6) {
+    return c.json({ error: '密码长度至少为 6 位' }, 400);
+  }
+
+  const userId = 'usr_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  const { hash, salt } = await hashPassword(password);
+  const finalNickname = nickname?.trim() || username;
+
+  // 插入用户
+  await c.env.DB.prepare(
+    'INSERT INTO users (id, username, password_hash, salt, nickname) VALUES (?, ?, ?, ?, ?)'
+  ).bind(userId, username.trim(), hash, salt, finalNickname).run();
+
+  // 为新用户初始化预置常用账户和分类
+  await initDefaultUserData(c.env.DB, userId);
 
   const sessionUser: UserSession = { id: userId, username: username.trim(), nickname: finalNickname };
   const token = await createSessionToken(sessionUser, c.env.JWT_SECRET);
@@ -137,15 +145,35 @@ authRouter.post('/login', async (c) => {
   return c.json({ user: sessionUser, token });
 });
 
-// 退出登录
+// 退出登录 (同时清理根域与子域 Cookie)
 authRouter.post('/logout', (c) => {
+  const rootDomain = c.env.ROOT_DOMAIN || 'b1uegrey.xyz';
+  deleteCookie(c, 'auth_token', { domain: '.' + rootDomain, path: '/' });
   deleteCookie(c, 'auth_token', { path: '/' });
   return c.json({ success: true });
 });
 
-// 获取当前用户信息
-authRouter.get('/me', requireAuth, (c) => {
+// 获取当前用户信息（支持 SSO 用户的即时开通 JIT Provisioning）
+authRouter.get('/me', requireAuth, async (c) => {
   const user = c.get('user');
+
+  // JIT 自动检查并补齐子库用户与基础账户/分类
+  try {
+    const dbUser = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(user.id).first();
+    if (!dbUser) {
+      await c.env.DB.prepare(
+        'INSERT OR IGNORE INTO users (id, username, password_hash, salt, nickname) VALUES (?, ?, ?, ?, ?)'
+      ).bind(user.id, user.username, 'sso_managed', 'sso_managed', user.nickname || user.username).run();
+
+      const accRow = await c.env.DB.prepare('SELECT COUNT(*) as count FROM accounts WHERE user_id = ?').bind(user.id).first<{ count: number }>();
+      if (!accRow || accRow.count === 0) {
+        await initDefaultUserData(c.env.DB, user.id);
+      }
+    }
+  } catch (err) {
+    console.error('JIT Provisioning error in cf-bookkeeping:', err);
+  }
+
   return c.json({ user });
 });
 

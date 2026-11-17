@@ -1,6 +1,8 @@
 export interface Env {
   DB: D1Database;
   JWT_SECRET: string;
+  ROOT_DOMAIN?: string;
+  AUTH_URL?: string;
   ASSETS?: Fetcher;
 }
 
