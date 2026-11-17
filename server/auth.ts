@@ -134,6 +134,19 @@ export async function requireAuth(c: Context<{ Bindings: Env; Variables: { user:
       return c.json({ error: '登录凭证无效或已过期' }, 401);
     }
 
+    // 检查账号状态 (防封禁账号渗透)
+    if (payload.status === 'disabled') {
+      return c.json({ error: '该账号已被管理员封禁，无法访问记账系统' }, 403);
+    }
+
+    // 检查子系统授权矩阵
+    if (Array.isArray(payload.apps)) {
+      const isAllowed = payload.apps.includes('*') || payload.apps.includes('book');
+      if (!isAllowed) {
+        return c.json({ error: '您尚未获得访问记账与持物系统的权限，请联系管理员分配' }, 403);
+      }
+    }
+
     c.set('user', {
       id: payload.sub as string,
       username: (payload.username as string) || '',
