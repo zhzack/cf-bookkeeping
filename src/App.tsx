@@ -155,16 +155,33 @@ export function App() {
   // 1. 检查系统状态 (是否需要首次配置) 与用户登录状态
   const checkStatus = async () => {
     try {
-      const statusRes = await fetchApi<{ needSetup: boolean }>('/api/auth/status');
-      if (statusRes.needSetup) {
-        setNeedSetup(true);
-        setInitLoading(false);
-        return;
-      }
+      const statusRes = await fetchApi<{ needSetup: boolean; ssoAuthUrl?: string }>('/api/auth/status');
 
       // 尝试获取当前登录用户
-      const meRes = await fetchApi<{ user: User }>('/api/auth/me');
-      setUser(meRes.user);
+      try {
+        const meRes = await fetchApi<{ user: User }>('/api/auth/me');
+        setUser(meRes.user);
+        setInitLoading(false);
+        return;
+      } catch (authErr) {
+        // 未登录状态
+        const host = window.location.hostname;
+        const isB1uegreyDomain = host === 'b1uegrey.xyz' || host.endsWith('.b1uegrey.xyz');
+        const ssoAuthUrl = statusRes.ssoAuthUrl || 'https://auth.b1uegrey.xyz';
+
+        // 若处于主域/子域环境且未登录，自动跳转至统一 SSO 身份认证中心
+        if (isB1uegreyDomain) {
+          const redirectTarget = encodeURIComponent(window.location.href);
+          window.location.href = `${ssoAuthUrl}/?redirect=${redirectTarget}`;
+          return;
+        }
+
+        // 本地环境：若未初始化展示向导，否则展示本地登录页
+        if (statusRes.needSetup) {
+          setNeedSetup(true);
+        }
+        setUser(null);
+      }
     } catch (err) {
       setUser(null);
     } finally {
@@ -252,6 +269,10 @@ export function App() {
       await fetchApi('/api/auth/logout', { method: 'POST' });
     } finally {
       setUser(null);
+      const host = window.location.hostname;
+      if (host === 'b1uegrey.xyz' || host.endsWith('.b1uegrey.xyz')) {
+        window.location.href = `https://auth.b1uegrey.xyz/?redirect=${encodeURIComponent(window.location.href)}`;
+      }
     }
   };
 

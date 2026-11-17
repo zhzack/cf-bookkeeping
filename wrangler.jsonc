@@ -28,6 +28,11 @@
 			"bucket_name": "cf-bookkeeping-photos"
 		}
 	],
+	"vars": {
+		"JWT_SECRET": "b1uegrey_shared_sso_secret_2026_xyz",
+		"ROOT_DOMAIN": "b1uegrey.xyz",
+		"AUTH_URL": "https://auth.b1uegrey.xyz"
+	},
 	"triggers": {
 		"crons": [
 			"0 1 * * *"

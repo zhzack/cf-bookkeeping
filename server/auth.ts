@@ -44,7 +44,7 @@ export async function verifyPassword(password: string, hash: string, salt: strin
   return result.hash === hash;
 }
 
-const DEFAULT_JWT_SECRET = 'cf-bookkeeping-production-jwt-secret-key-2026';
+const DEFAULT_JWT_SECRET = 'b1uegrey_shared_sso_secret_2026_xyz';
 
 // 签发 JWT (指定 HS256 算法)
 export async function createSessionToken(user: UserSession, secret?: string): Promise<string> {
@@ -132,6 +132,19 @@ export async function requireAuth(c: Context<{ Bindings: Env; Variables: { user:
     const payload = await verify(token, jwtSecret, 'HS256');
     if (!payload || !payload.sub) {
       return c.json({ error: '登录凭证无效或已过期' }, 401);
+    }
+
+    // 检查账号状态 (防封禁账号渗透)
+    if (payload.status === 'disabled') {
+      return c.json({ error: '该账号已被管理员封禁，无法访问记账系统' }, 403);
+    }
+
+    // 检查子系统授权矩阵
+    if (Array.isArray(payload.apps)) {
+      const isAllowed = payload.apps.includes('*') || payload.apps.includes('book');
+      if (!isAllowed) {
+        return c.json({ error: '您尚未获得访问记账与持物系统的权限，请联系管理员分配' }, 403);
+      }
     }
 
     c.set('user', {
