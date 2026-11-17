@@ -80,7 +80,11 @@ export function computeSubscriptionStats(sub: Subscription, todayStr: string): S
   };
 }
 
-// 执行单笔扣款入账操作，并自动滚动下一次扣款日期
+function getTodayUtc8(): string {
+  return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+// 执行单笔周期入账/扣款操作，并自动滚动下一次日期
 export async function processSingleSubscriptionBilling(
   db: D1Database,
   sub: Subscription,
@@ -88,8 +92,10 @@ export async function processSingleSubscriptionBilling(
 ): Promise<{ transaction_id: string; next_billing_date: string }> {
   const txId = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
   const txTime = `${billingDateStr} 09:00:00`;
+  const txType: 'expense' | 'income' = sub.type === 'income' ? 'income' : 'expense';
+  const remarkPrefix = txType === 'income' ? '[周期入账]' : '[周期扣费]';
 
-  // 获取有效扣款账户 (若无则取首个账户)
+  // 获取有效账户 (若无则取首个账户)
   let accountId = sub.account_id;
   if (!accountId) {
     const firstAcc = await db.prepare(
@@ -98,24 +104,25 @@ export async function processSingleSubscriptionBilling(
     accountId = firstAcc?.id || null;
   }
 
-  // 插入记账支出流水
+  // 插入记账流水（支持周期支出与周期收入）
   await db.prepare(
     `INSERT INTO transactions (
       id, user_id, type, amount, account_id, category_id,
       transaction_time, remark, exclude_daily_cost, subscription_id, source
-    ) VALUES (?, ?, 'expense', ?, ?, ?, ?, ?, 0, ?, 'subscription')`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'subscription')`
   ).bind(
     txId,
     sub.user_id,
+    txType,
     sub.amount,
     accountId,
     sub.category_id || null,
     txTime,
-    `[周期扣费] ${sub.name}`,
+    `${remarkPrefix} ${sub.name}`,
     sub.id
   ).run();
 
-  // 计算并更新下个扣款日
+  // 计算并更新下个日期
   const nextBilling = computeNextBillingDate(sub.next_billing_date, sub.period_type, sub.period_interval);
   await db.prepare(
     `UPDATE subscriptions
@@ -126,9 +133,9 @@ export async function processSingleSubscriptionBilling(
   return { transaction_id: txId, next_billing_date: nextBilling };
 }
 
-// 自动扫描并处理到期且开启自动记账的订阅 (Cron / 请求随路自动触发)
+// 自动扫描并处理到期且开启自动记账的周期项 (Cron / 请求随路自动触发)
 export async function processDueSubscriptions(db: D1Database, userId?: string): Promise<number> {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTodayUtc8();
   let sql = `
     SELECT * FROM subscriptions
     WHERE status = 'active'
@@ -160,7 +167,7 @@ export async function processDueSubscriptions(db: D1Database, userId?: string): 
 subscriptionsRouter.get('/', async (c) => {
   const user = c.get('user');
   const statusParam = c.req.query('status') || 'active';
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTodayUtc8();
 
   // 随路自愈：自动执行今日或以前到期且开启 auto_record 的订阅入账
   await processDueSubscriptions(c.env.DB, user.id);
@@ -197,8 +204,13 @@ subscriptionsRouter.get('/', async (c) => {
   ).bind(user.id).all<Subscription>();
   const allActiveStats = (allActiveQuery.results || []).map((sub) => computeSubscriptionStats(sub, todayStr));
 
-  const monthlyTotal = allActiveStats.reduce((sum, s) => sum + s.monthly_equivalent_amount, 0);
-  const yearlyTotal = allActiveStats.reduce((sum, s) => sum + s.yearly_equivalent_amount, 0);
+  const activeExpenses = allActiveStats.filter((s) => s.type !== 'income');
+  const activeIncomes = allActiveStats.filter((s) => s.type === 'income');
+
+  const monthlyTotal = activeExpenses.reduce((sum, s) => sum + s.monthly_equivalent_amount, 0);
+  const yearlyTotal = activeExpenses.reduce((sum, s) => sum + s.yearly_equivalent_amount, 0);
+  const monthlyIncome = activeIncomes.reduce((sum, s) => sum + s.monthly_equivalent_amount, 0);
+  const yearlyIncome = activeIncomes.reduce((sum, s) => sum + s.yearly_equivalent_amount, 0);
   const upcoming7Days = allActiveStats.filter((s) => s.days_until_billing >= 0 && s.days_until_billing <= 7).length;
   const pendingConfirmation = allActiveStats.filter((s) => s.is_pending_confirmation).length;
 
@@ -206,6 +218,9 @@ subscriptionsRouter.get('/', async (c) => {
     total_active_count: allActiveStats.length,
     monthly_total_cost: monthlyTotal,
     yearly_total_cost: yearlyTotal,
+    monthly_total_income: monthlyIncome,
+    yearly_total_income: yearlyIncome,
+    income_active_count: activeIncomes.length,
     upcoming_7_days_count: upcoming7Days,
     pending_confirmation_count: pendingConfirmation,
   };
@@ -250,16 +265,17 @@ subscriptionsRouter.get('/:id', async (c) => {
   return c.json({ subscription, history: history || [] });
 });
 
-// 3. 新建订阅
+// 3. 新建周期订阅 / 固定收入（如每月发薪）
 subscriptionsRouter.post('/', async (c) => {
   const user = c.get('user');
   const body = await c.req.json();
 
   const {
+    type = 'expense',           // 'expense' | 'income'
     name,
     category_id,
     account_id,
-    amount,                     // 元或分
+    amount,                     // 单位：分
     currency = 'CNY',
     period_type = 'monthly',    // 'monthly' | 'yearly' | 'weekly' | 'quarterly'
     period_interval = 1,
@@ -270,15 +286,19 @@ subscriptionsRouter.post('/', async (c) => {
     color = '#3b82f6',
     remark,
     record_first_bill_now = false,
+    backfill_past_periods = false,
   } = body;
 
+  const subType: 'expense' | 'income' = type === 'income' ? 'income' : 'expense';
+  const remarkPrefix = subType === 'income' ? '[周期入账]' : '[周期扣费]';
+
   if (!name || !name.trim()) {
-    return c.json({ error: '订阅名称不能为空' }, 400);
+    return c.json({ error: subType === 'income' ? '收入名称不能为空' : '订阅名称不能为空' }, 400);
   }
 
   const numAmount = Math.round(Number(amount) || 0);
   if (numAmount <= 0) {
-    return c.json({ error: '每期扣款金额必须大于 0' }, 400);
+    return c.json({ error: '每期金额必须大于 0' }, 400);
   }
 
   const validTypes = ['monthly', 'yearly', 'weekly', 'quarterly'];
@@ -286,72 +306,117 @@ subscriptionsRouter.post('/', async (c) => {
     return c.json({ error: '周期类型无效' }, 400);
   }
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTodayUtc8();
   const firstDate = first_billing_date || todayStr;
   const subId = 'sub_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  const intervalNum = Math.max(1, Number(period_interval) || 1);
   const parsedDay = Number(billing_day) || Number(firstDate.slice(8, 10)) || 1;
 
+  // 确保有效账户
+  let resolvedAccountId = account_id || null;
+  if (!resolvedAccountId) {
+    const firstAcc = await c.env.DB.prepare(
+      'SELECT id FROM accounts WHERE user_id = ? ORDER BY sort_order ASC, created_at ASC LIMIT 1'
+    ).bind(user.id).first<{ id: string }>();
+    resolvedAccountId = firstAcc?.id || null;
+  }
+
   let nextBilling = firstDate;
+  const txDatesToInsert: string[] = [];
 
-  // 若选择立即记入首期账单
-  let firstTxId: string | null = null;
-  if (record_first_bill_now) {
-    firstTxId = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-    await c.env.DB.prepare(
-      `INSERT INTO transactions (
-        id, user_id, type, amount, account_id, category_id,
-        transaction_time, remark, exclude_daily_cost, subscription_id, source
-      ) VALUES (?, ?, 'expense', ?, ?, ?, ?, ?, 0, ?, 'subscription')`
-    ).bind(
-      firstTxId,
-      user.id,
-      numAmount,
-      account_id || null,
-      category_id || null,
-      `${firstDate} 09:00:00`,
-      `[周期扣费] ${name.trim()}`,
-      subId
-    ).run();
-
-    // 下个扣款日自动后移一个周期
-    nextBilling = computeNextBillingDate(firstDate, period_type, period_interval);
+  if (backfill_past_periods && firstDate <= todayStr) {
+    // 从首期日期逐期补录直至今天（最多 60 期防误输入过早年份）
+    let cursor = firstDate;
+    let safety = 0;
+    while (cursor <= todayStr && safety < 60) {
+      txDatesToInsert.push(cursor);
+      cursor = computeNextBillingDate(cursor, period_type, intervalNum);
+      safety++;
+    }
+    nextBilling = cursor;
+  } else if (record_first_bill_now) {
+    txDatesToInsert.push(firstDate);
+    nextBilling = computeNextBillingDate(firstDate, period_type, intervalNum);
   }
 
   await c.env.DB.prepare(
     `INSERT INTO subscriptions (
-      id, user_id, name, category_id, account_id, amount, currency,
+      id, user_id, type, name, category_id, account_id, amount, currency,
       period_type, period_interval, billing_day, first_billing_date,
       next_billing_date, auto_record, status, icon, color, remark
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`
   ).bind(
     subId,
     user.id,
+    subType,
     name.trim(),
     category_id || null,
-    account_id || null,
+    resolvedAccountId,
     numAmount,
     currency,
     period_type,
-    Math.max(1, Number(period_interval) || 1),
+    intervalNum,
     parsedDay,
     firstDate,
     nextBilling,
     auto_record ? 1 : 0,
-    icon || 'calendar',
-    color || '#3b82f6',
+    icon || (subType === 'income' ? 'Briefcase' : 'Calendar'),
+    color || (subType === 'income' ? '#10b981' : '#3b82f6'),
     remark?.trim() || null
   ).run();
 
-  return c.json({ id: subId, message: '订阅创建成功', first_transaction_id: firstTxId }, 201);
+  let firstTxId: string | null = null;
+  if (txDatesToInsert.length > 0 && resolvedAccountId) {
+    const stmts: D1PreparedStatement[] = [];
+    for (const dt of txDatesToInsert) {
+      const txId = 'tx_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+      if (!firstTxId) firstTxId = txId;
+      stmts.push(
+        c.env.DB.prepare(
+          `INSERT INTO transactions (
+            id, user_id, type, amount, account_id, category_id,
+            transaction_time, remark, exclude_daily_cost, subscription_id, source
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'subscription')`
+        ).bind(
+          txId,
+          user.id,
+          subType,
+          numAmount,
+          resolvedAccountId,
+          category_id || null,
+          `${dt} 09:00:00`,
+          `${remarkPrefix} ${name.trim()}`,
+          subId
+        )
+      );
+    }
+    await c.env.DB.batch(stmts);
+  }
+
+  return c.json(
+    {
+      id: subId,
+      message:
+        txDatesToInsert.length > 1
+          ? `创建成功，已自动补录 ${txDatesToInsert.length} 期历史流水`
+          : subType === 'income'
+          ? '周期收入创建成功'
+          : '订阅创建成功',
+      first_transaction_id: firstTxId,
+      backfilled_count: txDatesToInsert.length,
+    },
+    201
+  );
 });
 
-// 4. 修改订阅
+// 4. 修改订阅 / 周期收入
 subscriptionsRouter.put('/:id', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
   const body = await c.req.json();
 
   const {
+    type,
     name,
     category_id,
     account_id,
@@ -372,12 +437,15 @@ subscriptionsRouter.put('/:id', async (c) => {
     'SELECT id FROM subscriptions WHERE id = ? AND user_id = ?'
   ).bind(id, user.id).first();
   if (!existing) {
-    return c.json({ error: '未找到该订阅' }, 404);
+    return c.json({ error: '未找到该项目' }, 404);
   }
+
+  const normalizedType = type === 'income' ? 'income' : type === 'expense' ? 'expense' : null;
 
   await c.env.DB.prepare(
     `UPDATE subscriptions
-     SET name = COALESCE(?, name),
+     SET type = COALESCE(?, type),
+         name = COALESCE(?, name),
          category_id = ?,
          account_id = ?,
          amount = COALESCE(?, amount),
@@ -394,6 +462,7 @@ subscriptionsRouter.put('/:id', async (c) => {
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND user_id = ?`
   ).bind(
+    normalizedType,
     name?.trim() || null,
     category_id !== undefined ? (category_id || null) : null,
     account_id !== undefined ? (account_id || null) : null,
@@ -448,13 +517,14 @@ subscriptionsRouter.post('/:id/bill-now', async (c) => {
     return c.json({ error: '未找到该订阅' }, 404);
   }
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTodayUtc8();
   const billingDate = sub.next_billing_date <= todayStr ? sub.next_billing_date : todayStr;
 
   const res = await processSingleSubscriptionBilling(c.env.DB, sub, billingDate);
+  const actionLabel = sub.type === 'income' ? '入账' : '扣款';
 
   return c.json({
-    message: `已为「${sub.name}」成功记入一期扣款，下次扣款日更新为 ${res.next_billing_date}`,
+    message: `已为「${sub.name}」成功记入一期${actionLabel}，下次日期更新为 ${res.next_billing_date}`,
     ...res,
   });
 });

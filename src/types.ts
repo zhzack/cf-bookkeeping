@@ -309,6 +309,7 @@ export interface CardsSummary {
 export interface Subscription {
   id: string;
   user_id: string;
+  type?: 'expense' | 'income';  // 'expense' (周期支出/订阅) | 'income' (周期收入/发薪)
   name: string;
   category_id?: string | null;
   account_id?: string | null;
@@ -343,8 +344,11 @@ export interface SubscriptionWithStats extends Subscription {
 
 export interface SubscriptionsSummary {
   total_active_count: number;
-  monthly_total_cost: number;       // 全部在役订阅折合每月总支出 (分)
-  yearly_total_cost: number;        // 全部在役订阅折合每年总支出 (分)
+  monthly_total_cost: number;       // 全部在役支出订阅折合每月总支出 (分)
+  yearly_total_cost: number;        // 全部在役支出订阅折合每年总支出 (分)
+  monthly_total_income?: number;    // 全部在役周期收入折合每月总收入 (分)
+  yearly_total_income?: number;     // 全部在役周期收入折合每年总收入 (分)
+  income_active_count?: number;     // 在役周期收入项目数
   upcoming_7_days_count: number;
   pending_confirmation_count: number;
 }

@@ -126,8 +126,9 @@ export function App() {
   const [adjustingCard, setAdjustingCard] = useState<PrepaidCardWithStats | null>(null);
   const [detailCardId, setDetailCardId] = useState<string | null>(null);
 
-  // 周期订阅相关弹窗状态
+  // 周期订阅 / 周期收入相关弹窗状态
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
+  const [subModalDefaultType, setSubModalDefaultType] = useState<'expense' | 'income'>('expense');
   const [editingSub, setEditingSub] = useState<SubscriptionWithStats | null>(null);
   const [detailSubId, setDetailSubId] = useState<string | null>(null);
 
@@ -604,8 +605,9 @@ export function App() {
             <SubscriptionsView
               accounts={accounts}
               categories={categories}
-              onOpenAddSub={() => {
+              onOpenAddSub={(defaultType = 'expense') => {
                 setEditingSub(null);
+                setSubModalDefaultType(defaultType);
                 setIsSubModalOpen(true);
               }}
               onOpenDetail={(subId) => {
@@ -613,6 +615,7 @@ export function App() {
               }}
               onEditSub={(sub) => {
                 setEditingSub(sub);
+                setSubModalDefaultType(sub.type === 'income' ? 'income' : 'expense');
                 setIsSubModalOpen(true);
               }}
               refreshTrigger={refreshTrigger}
@@ -634,6 +637,7 @@ export function App() {
           {activeTab === 'accounts' && (
             <AccountsView
               accounts={accounts}
+              categories={categories}
               onOpenAddAccount={() => {
                 setEditingAccount(null);
                 setIsAccountModalOpen(true);
@@ -642,7 +646,7 @@ export function App() {
                 setEditingAccount(acc);
                 setIsAccountModalOpen(true);
               }}
-              onRefreshAccounts={loadBaseData}
+              onRefreshAccounts={triggerRefresh}
             />
           )}
 
@@ -887,7 +891,7 @@ export function App() {
           />
         )}
 
-        {/* 周期订阅弹窗 (新增 / 编辑) */}
+        {/* 周期订阅 / 固定收入弹窗 (新增 / 编辑) */}
         {isSubModalOpen && (
           <SubscriptionModal
             isOpen={isSubModalOpen}
@@ -897,6 +901,7 @@ export function App() {
             }}
             onSuccess={triggerRefresh}
             subscriptionToEdit={editingSub}
+            defaultType={subModalDefaultType}
             accounts={accounts}
             categories={categories}
           />

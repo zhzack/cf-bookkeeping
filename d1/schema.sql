@@ -249,7 +249,8 @@ CREATE INDEX IF NOT EXISTS idx_card_logs_user ON prepaid_card_logs(user_id);
 CREATE TABLE IF NOT EXISTS subscriptions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    name TEXT NOT NULL,                          -- 订阅名称 (如: iCloud 200GB, ChatGPT Plus, 房屋租金, 宽带费)
+    type TEXT NOT NULL DEFAULT 'expense',        -- 类型: 'expense'(周期支出/订阅) | 'income'(周期收入/发薪)
+    name TEXT NOT NULL,                          -- 订阅名称 (如: iCloud 200GB, ChatGPT Plus, 房屋租金, 每月薪资)
     category_id TEXT DEFAULT NULL,               -- 关联支出分类
     account_id TEXT DEFAULT NULL,                -- 默认扣款账户
     amount INTEGER NOT NULL DEFAULT 0,           -- 每期扣款金额 (单位: 分)

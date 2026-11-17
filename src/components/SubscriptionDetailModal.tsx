@@ -103,7 +103,9 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
       <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h2 className="text-base font-bold text-slate-800">订阅项目与扣费历史</h2>
+          <h2 className="text-base font-bold text-slate-800">
+            {sub?.type === 'income' ? '周期收入与入账历史' : '订阅项目与扣费历史'}
+          </h2>
           <button
             onClick={onClose}
             className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
@@ -147,14 +149,17 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
                   </div>
 
                   <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-white/20 backdrop-blur-md border border-white/20">
-                    {getPeriodLabel(sub.period_type)}扣费
+                    {getPeriodLabel(sub.period_type)}{sub.type === 'income' ? '入账' : '扣费'}
                   </span>
                 </div>
 
                 <div className="relative z-10 mt-6 flex items-end justify-between">
                   <div>
-                    <div className="text-[11px] text-white/70 font-medium">每期扣费</div>
+                    <div className="text-[11px] text-white/70 font-medium">
+                      {sub.type === 'income' ? '每期入账' : '每期扣费'}
+                    </div>
                     <div className="text-2xl font-black mt-0.5 tracking-tight">
+                      {sub.type === 'income' ? '+' : ''}
                       {formatCurrency(sub.amount)}
                       <span className="text-xs font-normal text-white/70 ml-1">
                         / {getPeriodLabel(sub.period_type)}
@@ -163,8 +168,11 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
                   </div>
 
                   <div className="text-right">
-                    <div className="text-[10px] text-white/70">折合月度固定支出</div>
+                    <div className="text-[10px] text-white/70">
+                      {sub.type === 'income' ? '折合月度固定收入' : '折合月度固定支出'}
+                    </div>
                     <div className="text-sm font-bold text-white/95 mt-0.5">
+                      {sub.type === 'income' ? '+' : ''}
                       {formatCurrency(sub.monthly_equivalent_amount)} / 月
                     </div>
                   </div>
@@ -174,7 +182,9 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
               {/* Status and Next Billing details */}
               <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 grid grid-cols-2 gap-3 text-xs">
                 <div>
-                  <span className="text-slate-400">下次预计扣款：</span>
+                  <span className="text-slate-400">
+                    {sub.type === 'income' ? '下次预计入账：' : '下次预计扣款：'}
+                  </span>
                   <div className="font-bold text-slate-800 mt-1 flex items-center gap-1.5">
                     <span>{sub.next_billing_date}</span>
                     {sub.days_until_billing === 0 ? (
@@ -259,12 +269,14 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
               {/* History transactions */}
               <div>
                 <h3 className="text-xs font-bold text-slate-700 mb-3 flex items-center justify-between">
-                  <span>历史周期扣费流水 ({history.length})</span>
+                  <span>
+                    {sub.type === 'income' ? '历史周期入账流水' : '历史周期扣费流水'} ({history.length})
+                  </span>
                 </h3>
 
                 {history.length === 0 ? (
                   <div className="py-8 text-center text-slate-400 text-xs bg-slate-50 rounded-2xl">
-                    暂无历史扣费记录，可在上方点击「立即记入一期」或等待扣款日自动生成
+                    暂无历史记录，可在上方点击「立即记入一期」或等待到期自动生成
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -275,7 +287,7 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
                       >
                         <div className="space-y-1">
                           <div className="font-bold text-slate-800">
-                            {tx.remark || `[周期扣费] ${sub.name}`}
+                            {tx.remark || `${tx.type === 'income' ? '[周期入账]' : '[周期扣费]'} ${sub.name}`}
                           </div>
                           <div className="text-[11px] text-slate-400 flex items-center gap-2">
                             <span>{tx.transaction_time.slice(0, 10)}</span>
@@ -283,8 +295,13 @@ export const SubscriptionDetailModal: React.FC<Props> = ({
                           </div>
                         </div>
 
-                        <div className="font-bold text-sm text-slate-800">
-                          -{formatCurrency(tx.amount)}
+                        <div
+                          className={`font-bold text-sm ${
+                            tx.type === 'income' ? 'text-emerald-600' : 'text-slate-800'
+                          }`}
+                        >
+                          {tx.type === 'income' ? '+' : '-'}
+                          {formatCurrency(tx.amount)}
                         </div>
                       </div>
                     ))}
